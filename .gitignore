@@ -1,0 +1,45 @@
+# Xcode
+build/
+DerivedData/
+*.xcarchive
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+*.dmg
+
+# Build artifacts
+*.app
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Export
+ExportOptions.plist
+
+# Dependencies
+Pods/
+.build/
+Package.resolved
+
+# Nested repos / subprojects
+Presto backend/
+prestowebsite/
+
+# Wrangler / Cloudflare
+.wrangler/
+
+# Claude Code
+.claude/
+
+# Dev uploads
+Dev Uploads /
+
+# Files with secrets
+RAILWAY_SETUP.md
+
+# Misc
+*.swp
+*~
