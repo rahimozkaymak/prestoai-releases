@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Presto AI — Admin</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/png" href="/img/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #08080A; --bg1: #0A0A0D; --bg2: #0C0C0F; --bg3: #111114;
+    --border: #1A1A1E; --border2: #222; --text: #CCC; --text2: #888;
+    --text3: #555; --text4: #333; --white: #E8E8E8;
+    --green: #6EE7B7; --blue: #38BDF8; --purple: #818CF8;
+    --yellow: #FCD34D; --red: #F87171;
+    --font: 'Outfit', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+
+  body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; }
+  input, button, select { font-family: inherit; }
+  a { color: var(--green); text-decoration: none; }
+
+  /* ── LAYOUT ── */
+  .app { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 200px; background: var(--bg1); border-right: 1px solid #161619;
+    display: flex; flex-direction: column; position: sticky; top: 0;
+    height: 100vh; flex-shrink: 0; z-index: 10;
+  }
+  .sidebar-brand {
+    padding: 20px 16px 14px; border-bottom: 1px solid #161619;
+    display: flex; align-items: center; gap: 10;
+  }
+  .sidebar-logo {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--green), var(--blue));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 800; color: #000;
+  }
+  .sidebar-title { font-size: 14px; font-weight: 700; color: var(--white); }
+  .sidebar-sub { font-size: 9px; color: #444; text-transform: uppercase; letter-spacing: 0.12em; }
+
+  .sidebar-nav { padding: 10px 8px; flex: 1; }
+  .nav-btn {
+    display: flex; align-items: center; gap: 10; width: 100%;
+    padding: 9px 12px; border: none; border-radius: 8px; cursor: pointer;
+    background: transparent; color: var(--text3); font-size: 13px;
+    font-weight: 400; text-align: left; transition: all 0.12s; margin-bottom: 2px;
+  }
+  .nav-btn:hover { color: #999; }
+  .nav-btn.active { background: #131316; color: var(--white); font-weight: 600; }
+  .nav-icon { font-size: 14px; opacity: 0.6; width: 18px; text-align: center; }
+
+  .sidebar-footer {
+    padding: 12px 16px; border-top: 1px solid #161619;
+    font-size: 10px; color: #444;
+  }
+  .sidebar-footer button {
+    background: none; border: none; color: #444; font-size: 10px;
+    cursor: pointer; padding: 0; font-family: var(--font);
+  }
+  .sidebar-footer button:hover { color: var(--text2); }
+
+  .main { flex: 1; padding: 24px 28px; max-width: 1100px; overflow-x: hidden; }
+  .main-header {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;
+  }
+  .main-header h2 { font-size: 22px; font-weight: 700; color: var(--white); }
+
+  .btn-refresh {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 16px; color: var(--text3); font-size: 11px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-refresh:hover { color: var(--text2); border-color: var(--border2); }
+  .btn-refresh:disabled { opacity: 0.4; }
+
+  /* ── COMPONENTS ── */
+  .grid { display: grid; gap: 10px; margin-bottom: 14px; }
+  .grid-4 { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+  .stat-card {
+    background: var(--bg3); border: 1px solid #1C1C20; border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .stat-card[data-accent] { border-top: 2px solid; }
+  .stat-label {
+    font-size: 10px; color: #666; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; margin-bottom: 6px;
+  }
+  .stat-row { display: flex; align-items: center; gap: 10px; }
+  .stat-value {
+    font-size: 24px; font-weight: 700; color: var(--white);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-sub { font-size: 10px; color: #4A4A4A; margin-top: 4px; }
+
+  .section {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 22px; margin-bottom: 14px;
+  }
+  .section-header {
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;
+  }
+  .section-title { font-size: 14px; font-weight: 600; color: #CCC; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .badge-active, .badge-paid, .badge-success { background: #0D3320; color: var(--green); }
+  .badge-trial, .badge-pending { background: #2D2006; color: var(--yellow); }
+  .badge-expired, .badge-canceled { background: #2D1010; color: var(--red); }
+  .badge-free { background: #1A1A2E; color: var(--purple); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; padding: 7px 10px; border-bottom: 1px solid #1E1E22;
+    color: var(--text3); font-weight: 500; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
+  }
+  td {
+    padding: 9px 10px; border-bottom: 1px solid #141416;
+    color: #BBB; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  th.right, td.right { text-align: right; }
+  tr.clickable { cursor: pointer; transition: background 0.12s; }
+  tr.clickable:hover { background: #131316; }
+
+  .funnel-row { display: flex; align-items: center; gap: 12px; margin-bottom: 5px; }
+  .funnel-label { width: 110px; font-size: 11px; color: var(--text2); text-align: right; flex-shrink: 0; }
+  .funnel-bar { flex: 1; height: 26px; background: #141416; border-radius: 4px; overflow: hidden; position: relative; }
+  .funnel-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; transition: width 0.4s; }
+  .funnel-val { font-size: 11px; font-weight: 700; color: var(--white); }
+  .funnel-drop { width: 65px; font-size: 9px; color: #444; flex-shrink: 0; }
+
+  .bar-chart { display: flex; align-items: flex-end; gap: 3px; padding: 0 2px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .bar-fill { width: 100%; max-width: 32px; min-width: 4px; border-radius: 3px 3px 0 0; transition: height 0.3s; opacity: 0.8; }
+  .bar-label { font-size: 8px; color: var(--text3); margin-top: 3px; }
+
+  .input {
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px;
+    padding: 8px 12px; color: var(--white); font-size: 13px; outline: none;
+    font-family: var(--mono);
+  }
+  .input:focus { border-color: #333; }
+  .input-sm { padding: 6px 10px; font-size: 12px; }
+
+  .btn-action {
+    background: #1A1A2E; border: 1px solid #2A2A3E; border-radius: 6px;
+    padding: 6px 14px; color: var(--purple); font-size: 12px;
+    cursor: pointer; font-weight: 600; transition: all 0.15s;
+  }
+  .btn-action:hover { background: #22223A; }
+  .btn-danger {
+    background: #2D1010; border: 1px solid #3D2020; border-radius: 4px;
+    padding: 2px 8px; color: var(--red); font-size: 10px; cursor: pointer;
+  }
+
+  .empty { padding: 24px; text-align: center; color: #444; font-size: 12px; }
+  .mono { font-family: var(--mono); }
+  .ellipsis { overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── LOGIN ── */
+  .login-wrap {
+    min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; background: var(--bg);
+  }
+  .login-box {
+    width: 360px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 36px; text-align: center;
+  }
+  .login-title { font-size: 30px; font-weight: 800; color: var(--white); margin-bottom: 2px; }
+  .login-sub { font-size: 11px; color: #444; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 28px; }
+  .login-form { display: flex; flex-direction: column; gap: 10px; }
+  .login-btn {
+    background: var(--green); color: #000; border: none; border-radius: 8px;
+    padding: 11px; font-size: 14px; font-weight: 700; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .login-btn:hover { opacity: 0.9; }
+  .login-btn:disabled { opacity: 0.5; }
+  .login-error { margin-top: 10px; color: var(--red); font-size: 11px; }
+
+  /* ── SPARKLINE ── */
+  .sparkline { display: block; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeIn 0.3s ease forwards; }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 860px) {
+    .sidebar { width: 56px; }
+    .sidebar-brand span, .sidebar-title, .sidebar-sub, .sidebar-footer span,
+    .nav-btn span:last-child { display: none; }
+    .nav-btn { justify-content: center; padding: 10px; }
+    .nav-icon { width: auto; }
+    .grid-3 { grid-template-columns: 1fr; }
+    .main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script>
+// ─── CONFIG ───
+const API = 'https://prestoai-backend-production.up.railway.app';
+
+// ─── STATE ───
+let state = {
+  token: localStorage.getItem('presto_admin_token'),
+  page: 'dashboard',
+  stats: null,
+  users: [],
+  selectedUser: null,
+  selectedUserDetail: null,
+  promos: [],
+  loading: false,
+  lastRefresh: null,
+  loginError: null,
+  loginLoading: false,
+};
+
+// ─── API ───
+async function apiLogin(email, password) {
+  state.loginLoading = true; state.loginError = null; render();
+  try {
+    const res = await fetch(`${API}/api/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || 'Login failed');
+    state.token = d.accessToken;
+    localStorage.setItem('presto_admin_token', d.accessToken);
+    await loadAll();
+  } catch (e) { state.loginError = e.message; }
+  state.loginLoading = false; render();
+}
+
+function logout() {
+  state.token = null; state.stats = null; state.users = [];
+  localStorage.removeItem('presto_admin_token');
+  render();
+}
+
+async function authFetch(path, opts = {}) {
+  if (!state.token) return null;
+  const res = await fetch(`${API}${path}`, {
+    ...opts,
+    headers: { ...opts.headers, Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
+  });
+  if (res.status === 401) { logout(); return null; }
+  return res.json();
+}
+
+async function loadAll() {
+  if (!state.token) return;
+  state.loading = true; state.loadError = null; render();
+  try {
+    const [s, u] = await Promise.all([
+      authFetch('/api/admin/stats'),
+      authFetch('/api/admin/users?limit=500&sort=created_at'),
+    ]);
+    if (s) state.stats = s;
+    if (u?.users) state.users = u.users;
+    state.lastRefresh = new Date();
+  } catch (e) {
+    console.error(e);
+    state.loadError = e.message || 'Failed to load';
+    if (e instanceof TypeError) state.loadError = 'CORS error — add https://get-prestoai.com to ALLOWED_ORIGINS on Railway';
+  }
+  state.loading = false; render();
+}
+
+async function loadUserDetail(id) {
+  const d = await authFetch(`/api/admin/users/${id}`);
+  if (d) { state.selectedUserDetail = d; render(); }
+}
+
+async function loadPromos() {
+  const d = await authFetch('/api/admin/promo/list');
+  if (d?.promos) { state.promos = d.promos; render(); }
+}
+
+// ─── FORMATTERS ───
+const fmt = n => { if (n == null) return '—'; if (n >= 1e6) return (n/1e6).toFixed(1)+'M'; if (n >= 1e3) return (n/1e3).toFixed(1)+'K'; return n.toLocaleString(); };
+const fmtUSD = n => n == null ? '—' : '$' + Number(n).toFixed(4);
+const fmtDate = d => { if (!d) return '—'; return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
+const fmtDatetime = d => { if (!d) return '—'; return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+const daysSince = d => { if (!d) return null; return Math.floor((Date.now() - new Date(d).getTime()) / 86400000); };
+
+function badge(status) {
+  const cls = { active:'active', paid:'active', success:'active', trial:'trial', pending:'trial', expired:'expired', canceled:'expired', free:'free' }[status] || 'free';
+  return `<span class="badge badge-${cls}">${status || '—'}</span>`;
+}
+
+function sparklineSVG(data, color, w=80, h=24) {
+  if (!data || data.length < 2) return '';
+  const max = Math.max(...data), min = Math.min(...data), range = max - min || 1;
+  const pts = data.map((v,i) => `${(i/(data.length-1))*w},${h-((v-min)/range)*(h-4)-2}`).join(' ');
+  return `<svg width="${w}" height="${h}" class="sparkline"><polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts}"/></svg>`;
+}
+
+function barChart(data, labels, color, height=100) {
+  if (!data?.length) return '<div class="empty">No data</div>';
+  const max = Math.max(...data) || 1;
+  return `<div class="bar-chart" style="height:${height}px">${data.map((v,i) =>
+    `<div class="bar-col" style="height:100%"><div class="bar-fill" title="${labels?.[i]||''}: ${v}" style="height:${Math.max((v/max)*100, v>0?3:0)}%;background:${color}"></div>${labels?`<div class="bar-label">${labels[i]}</div>`:''}</div>`
+  ).join('')}</div>`;
+}
+
+function statCard(label, value, accent, sub, sparkData) {
+  return `<div class="stat-card" style="border-top-color:${accent}">
+    <div class="stat-label">${label}</div>
+    <div class="stat-row"><div class="stat-value">${value}</div>${sparkData ? sparklineSVG(sparkData, accent) : ''}</div>
+    ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
+  </div>`;
+}
+
+function section(title, content, action='') {
+  return `<div class="section"><div class="section-header"><div class="section-title">${title}</div>${action}</div>${content}</div>`;
+}
+
+function funnel(stages) {
+  const mx = stages[0]?.value || 1;
+  return stages.map((s,i) => {
+    const pct = mx > 0 ? (s.value/mx)*100 : 0;
+    const drop = i > 0 && stages[i-1].value > 0 ? `${((1-s.value/stages[i-1].value)*100).toFixed(0)}% drop` : '';
+    return `<div class="funnel-row">
+      <div class="funnel-label">${s.label}</div>
+      <div class="funnel-bar"><div class="funnel-fill" style="width:${Math.max(pct,2)}%;background:linear-gradient(90deg,${s.color}88,${s.color}33)"><span class="funnel-val">${fmt(s.value)}</span></div></div>
+      <div class="funnel-drop">${drop}</div>
+    </div>`;
+  }).join('');
+}
+
+function table(columns, rows, clickHandler) {
+  if (!rows?.length) return '<div class="empty">No data</div>';
+  const hdr = columns.map(c => `<th${c.align==='right'?' class="right"':''}>${c.label}</th>`).join('');
+  const body = rows.map((r,ri) =>
+    `<tr class="${clickHandler?'clickable':''}" ${clickHandler?`onclick="${clickHandler}(${ri})"`:''}>` +
+    columns.map(c => `<td${c.align==='right'?' class="right"':''}>${c.render(r)}</td>`).join('') +
+    '</tr>'
+  ).join('');
+  return `<div style="overflow-x:auto"><table><thead><tr>${hdr}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+// ─── USER CATEGORIES ───
+// Backend returns `category` for each user based on how they got access:
+//   "admin"   — you, the operator. excluded from all business metrics.
+//   "paid"    — went through Polar checkout. real money. the only true conversions.
+//   "promo"   — redeemed a promo code. free access, zero revenue.
+//   "granted" — admin gave them premium days. free access, zero revenue.
+//   "free"    — default. hasn't paid or used a code.
+
+// Derive category client-side if backend hasn't deployed yet (no `category` field)
+function getCat(u) {
+  if (u.category) return u.category;
+  const admins = state.stats?.admin_emails || [];
+  if (admins.includes(u.email)) return 'admin';
+  // No subscription_id on old backend — fall back to status + promo
+  if (u.status === 'active' && !u.redeemed_promo) return 'paid';
+  if (u.redeemed_promo) return 'promo';
+  return 'free';
+}
+
+function isAdmin(u) { return getCat(u) === 'admin'; }
+function allUsers() { return state.users; }
+function paidUsers() { return state.users.filter(u => getCat(u) === 'paid'); }
+function promoUsers() { return state.users.filter(u => getCat(u) === 'promo'); }
+function grantedUsers() { return state.users.filter(u => getCat(u) === 'granted'); }
+function freeUsers() { return state.users.filter(u => getCat(u) === 'free'); }
+function adminUsers() { return state.users.filter(u => getCat(u) === 'admin'); }
+// Non-paying active = anyone using the app who isn't paying: admin, promo, granted
+function nonPayingActive() { const c = getCat; return state.users.filter(u => c(u) === 'admin' || c(u) === 'promo' || c(u) === 'granted'); }
+function engagedUsers() { return state.users.filter(u => u.total_queries > 0); }
+
+const categoryColors = { paid:'#6EE7B7', promo:'#FCD34D', granted:'#38BDF8', free:'#818CF8', admin:'#555' };
+const categoryLabels = { paid:'PAID', promo:'PROMO', granted:'GRANTED', free:'FREE', admin:'ADMIN' };
+
+function categoryBadge(u) {
+  const cat = getCat(u);
+  const color = categoryColors[cat] || '#818CF8';
+  const bg = cat === 'paid' ? '#0D3320' : cat === 'promo' ? '#2D2006' : cat === 'granted' ? '#0D2033' : cat === 'admin' ? '#1A1A1E' : '#1A1A2E';
+  return `<span class="badge" style="background:${bg};color:${color}">${categoryLabels[cat]}</span>`;
+}
+
+// ─── PAGES ───
+
+function renderDashboard() {
+  const s = state.stats;
+  if (!s && state.loading) return '<div class="empty">Loading...</div>';
+  if (!s) return `<div class="empty" style="color:var(--red)">${state.loadError || 'Failed to load. Check console.'}</div>`;
+  const d = s.daily || [];
+  const dq = d.map(x=>x.queries), dc = d.map(x=>x.cost), dl = d.map(x=>x.date?.slice(5)), du = d.map(x=>x.unique_users);
+
+  const all = allUsers(), paid = paidUsers(), promo = promoUsers(), granted = grantedUsers(), free = freeUsers(), admin = adminUsers(), engaged = engagedUsers();
+  const nonPaying = nonPayingActive();
+  const tu = all.length, pu = paid.length, pru = promo.length, gru = granted.length, fu = free.length, au = admin.length;
+  const td = s.devices?.total||0, tq = s.queries?.total||0, qt = s.queries?.today||0;
+  const at = s.queries?.active_users_today||0, tc = s.cost?.total_usd||0;
+
+  // Cost breakdown by category
+  const paidCost = paid.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+  const nonPayingCost = nonPaying.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+
+  return `
+    <div class="grid grid-4">
+      ${statCard('All Users', fmt(tu), '#818CF8', `${pu} paid · ${pru} promo · ${gru} granted · ${au} admin · ${fu} free`)}
+      ${statCard('Paying Users', fmt(pu), '#6EE7B7', pu > 0 ? 'Through Polar checkout' : 'None yet')}
+      ${statCard('Non-Paying Active', fmt(nonPaying.length), '#FCD34D', `${au} admin · ${pru} promo · ${gru} granted`)}
+      ${statCard('Total Devices', fmt(td), '#6EE7B7')}
+      ${statCard('Total Queries', fmt(tq), '#38BDF8', '', dq)}
+      ${statCard('Queries Today', fmt(qt), '#38BDF8')}
+      ${statCard('Total API Cost', '$'+tc.toFixed(2), '#F87171', '', dc)}
+      ${statCard('Paid Conversion', fu+pu>0?((pu/(fu+pu))*100).toFixed(0)+'%':'—', '#6EE7B7', `${pu} of ${fu+pu} organic users`)}
+    </div>
+    <div class="grid grid-3">
+      ${section('Queries / Day', barChart(dq, dl, '#38BDF8'))}
+      ${section('API Cost / Day', barChart(dc, dl, '#F87171'))}
+      ${section('Active Users / Day', barChart(du, dl, '#FCD34D'))}
+    </div>
+    ${section('Conversion Funnel (organic only — admin, promo & granted excluded)', funnel([
+      {label:'Devices',value:td,color:'#818CF8'},
+      {label:'Registered',value:fu+pu,color:'#38BDF8'},
+      {label:'Engaged',value:engaged.filter(u=>getCat(u)==='free'||getCat(u)==='paid').length,color:'#FCD34D'},
+      {label:'Paid ($5.99)',value:pu,color:'#6EE7B7'},
+    ]))}
+    ${nonPaying.length > 0 ? section(`Non-Paying Active Users (${nonPaying.length}) — not in funnel`, `
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">These users have active access but generate $0 revenue. API cost: $${nonPayingCost.toFixed(4)}</div>
+      ${table(
+        [{label:'Email',render:r=>`<span style="color:var(--white);font-weight:500">${r.email}</span>`},
+         {label:'How',render:r=>categoryBadge(r)},
+         {label:'Promo',render:r=>r.redeemed_promo?`<span class="mono" style="font-size:10px;color:var(--purple)">${r.redeemed_promo}</span>`:'—'},
+         {label:'Queries',align:'right',render:r=>fmt(r.total_queries)},
+         {label:'API Cost',align:'right',render:r=>'$'+Number(r.total_cost_usd||0).toFixed(4)}],
+        nonPaying
+      )}
+    `) : ''}
+    ${section('Top Users by Cost (real users only)', table(
+      [{label:'Email',render:r=>`<span style="color:var(--white);font-weight:500">${r.email}</span>`},
+       {label:'Type',render:r=>categoryBadge(r)},
+       {label:'Queries',align:'right',render:r=>fmt(r.total_queries)},
+       {label:'Cost',align:'right',render:r=>'$'+Number(r.total_cost_usd||0).toFixed(4)},
+       {label:'Tokens',align:'right',render:r=>fmt((r.total_input_tokens||0)+(r.total_output_tokens||0))}],
+      [...real].sort((a,b)=>(b.total_cost_usd||0)-(a.total_cost_usd||0)).slice(0,5)
+    ))}`;
+}
+
+function renderUsers() {
+  const searchEl = document.getElementById('user-search');
+  const q = searchEl?.value?.toLowerCase() || '';
+  const filtered = state.users
+    .filter(u => !q || u.email?.toLowerCase().includes(q))
+    .sort((a,b) => (b.total_queries||0) - (a.total_queries||0));
+
+  // Store for click handler
+  window._filteredUsers = filtered;
+
+  function lastActiveCol(r) {
+    const d = daysSince(r.last_active_at);
+    if (d === null) return '<span style="color:#333">Never</span>';
+    if (d === 0) return '<span style="color:var(--green)">Today</span>';
+    if (d <= 7) return `<span style="color:var(--yellow)">${d}d ago</span>`;
+    return `<span style="color:var(--text3)">${d}d ago</span>`;
+  }
+
+  return `
+    <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center">
+      <input class="input input-sm" id="user-search" placeholder="Search email..." style="width:260px" value="${q}" oninput="render()">
+      <span style="font-size:11px;color:#444">${filtered.length} users</span>
+    </div>
+    ${section('', table(
+      [{label:'Email',render:r=>`<span style="color:var(--white);font-weight:500">${r.email}</span>`},
+       {label:'Type',render:r=>categoryBadge(r)},
+       {label:'Queries',align:'right',render:r=>fmt(r.total_queries)},
+       {label:'Today',align:'right',render:r=>fmt(r.queries_today)},
+       {label:'Cost',align:'right',render:r=>'$'+Number(r.total_cost_usd||0).toFixed(4)},
+       {label:'Promo',render:r=>r.redeemed_promo?`<span class="mono" style="font-size:10px;color:var(--purple)">${r.redeemed_promo}</span>`:'—'},
+       {label:'Referrals',align:'right',render:r=>fmt(r.referral_count)},
+       {label:'Joined',render:r=>fmtDate(r.created_at)},
+       {label:'Last Active',render:r=>lastActiveCol(r)}],
+      filtered, 'selectUser'
+    ))}`;
+}
+
+window.selectUser = function(idx) {
+  const u = window._filteredUsers[idx];
+  if (!u) return;
+  state.selectedUser = u;
+  state.selectedUserDetail = null;
+  render();
+  loadUserDetail(u.id);
+};
+
+function renderUserDetail() {
+  const u = state.selectedUserDetail?.user || state.selectedUser;
+  if (!u) return '';
+  const queries = state.selectedUserDetail?.recent_queries || [];
+  const daily = state.selectedUserDetail?.daily_usage || [];
+
+  return `
+    <button onclick="state.selectedUser=null;state.selectedUserDetail=null;render()" style="background:none;border:none;color:var(--green);font-size:12px;cursor:pointer;padding:0;margin-bottom:14px;font-family:var(--font)">← Back to users</button>
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
+      <div style="width:40px;height:40px;border-radius:50%;background:#1A1A2E;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:var(--purple)">${u.email?.[0]?.toUpperCase()||'?'}</div>
+      <div>
+        <div style="font-size:16px;font-weight:600;color:var(--white)">${u.email}</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:3px">
+          ${badge(u.status||u.subscription_status)}
+          <span style="font-size:10px;color:#444">Joined ${fmtDate(u.created_at)}</span>
+          ${u.trial_ends_at?`<span style="font-size:10px;color:var(--text3)">Trial ends ${fmtDate(u.trial_ends_at)}</span>`:''}
+          ${u.subscription_ends_at?`<span style="font-size:10px;color:var(--text3)">Sub ends ${fmtDate(u.subscription_ends_at)}</span>`:''}
+        </div>
+      </div>
+    </div>
+    <div class="grid grid-4">
+      ${statCard('Total Queries', fmt(u.total_queries), '#38BDF8')}
+      ${statCard('Input Tokens', fmt(u.total_input_tokens), '#818CF8')}
+      ${statCard('Output Tokens', fmt(u.total_output_tokens), '#818CF8')}
+      ${statCard('Total Cost', '$'+Number(u.total_cost_usd||0).toFixed(4), '#F87171')}
+      ${statCard('Referral Code', u.referral_code||'—', '#FCD34D')}
+      ${statCard('Promo Used', u.redeemed_promo||'None', '#818CF8')}
+    </div>
+    ${section('Admin Actions', `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input class="input input-sm" type="number" id="premium-days" value="30" style="width:70px">
+        <button class="btn-action" onclick="grantPremium('${u.email}')">Grant Premium Days</button>
+        <button class="btn-danger" style="padding:6px 14px;font-size:12px;font-weight:600" onclick="deleteUser('${u.id}','${u.email}')">Delete User</button>
+        <span id="action-msg" style="font-size:12px;color:var(--green)"></span>
+      </div>
+    `)}
+    ${daily.length ? section('Daily Usage', table(
+      [{label:'Date',render:r=>r.date},
+       {label:'Queries',align:'right',render:r=>fmt(r.queries)},
+       {label:'In Tokens',align:'right',render:r=>fmt(r.input_tokens)},
+       {label:'Out Tokens',align:'right',render:r=>fmt(r.output_tokens)},
+       {label:'Cost',align:'right',render:r=>'$'+Number(r.cost||0).toFixed(4)}],
+      daily
+    )) : ''}
+    ${section(`Recent Queries (${queries.length})`, table(
+      [{label:'Time',render:r=>fmtDatetime(r.timestamp)},
+       {label:'In',align:'right',render:r=>fmt(r.input_tokens)},
+       {label:'Out',align:'right',render:r=>fmt(r.output_tokens)},
+       {label:'Cost',align:'right',render:r=>fmtUSD(r.cost_usd)},
+       {label:'Resp (ms)',align:'right',render:r=>fmt(r.response_time_ms)},
+       {label:'Status',render:r=>badge(r.status)}],
+      queries
+    ))}`;
+}
+
+window.grantPremium = async function(email) {
+  const days = parseInt(document.getElementById('premium-days')?.value);
+  if (!days) return;
+  const res = await authFetch('/api/admin/set-premium', { method: 'POST', body: JSON.stringify({ email, days }) });
+  const msgEl = document.getElementById('action-msg');
+  if (msgEl) { msgEl.textContent = res ? `Granted ${days} days` : 'Failed'; setTimeout(() => msgEl.textContent = '', 3000); }
+};
+
+window.deleteUser = async function(id, email) {
+  if (!confirm(`Delete user ${email}? This removes all their data permanently.`)) return;
+  const res = await authFetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+  if (res) {
+    state.users = state.users.filter(u => u.id !== id);
+    state.selectedUser = null; state.selectedUserDetail = null;
+    render();
+  }
+};
+
+function renderEconomics() {
+  const s = state.stats;
+  if (!s && state.loading) return '<div class="empty">Loading...</div>';
+  if (!s) return `<div class="empty" style="color:var(--red)">${state.loadError || 'Failed to load. Check console.'}</div>`;
+  const daily = s.daily || [];
+  const paid = paidUsers(), nonPaying = nonPayingActive(), free = freeUsers(), admin = adminUsers(), promo = promoUsers(), granted = grantedUsers();
+  const tc = s.cost?.total_usd||0, tq = s.queries?.total||0;
+  const pu = paid.length, npu = nonPaying.length;
+
+  // Revenue: ONLY paid users (Polar checkout) generate MRR
+  const mrr = pu * 5.99;
+  const avgDC = daily.length > 0 ? daily.reduce((s,d)=>s+d.cost,0)/daily.length : 0;
+  const mc = avgDC * 30, margin = mrr > 0 ? ((mrr-mc)/mrr*100) : 0;
+
+  // Cost by category
+  const paidCost = paid.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+  const adminCost = admin.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+  const promoCost = promo.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+  const grantedCost = granted.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+  const freeCost = free.reduce((s,u)=>s+(u.total_cost_usd||0),0);
+
+  // Queries by category
+  const paidQ = paid.reduce((s,u)=>s+(u.total_queries||0),0);
+  const adminQ = admin.reduce((s,u)=>s+(u.total_queries||0),0);
+  const promoQ = promo.reduce((s,u)=>s+(u.total_queries||0),0);
+  const grantedQ = granted.reduce((s,u)=>s+(u.total_queries||0),0);
+  const freeQ = free.reduce((s,u)=>s+(u.total_queries||0),0);
+
+  return `
+    <div class="grid grid-4">
+      ${statCard('Est. MRR', '$'+mrr.toFixed(2), '#6EE7B7', pu > 0 ? `${pu} paying x $5.99` : 'No paying users yet')}
+      ${statCard('Est. Monthly Cost', '$'+mc.toFixed(2), '#F87171')}
+      ${statCard('Gross Margin', mrr > 0 ? margin.toFixed(0)+'%' : 'N/A', margin>50?'#6EE7B7':'#F87171', mrr === 0 ? 'No revenue yet' : '')}
+      ${statCard('Cost / Query', tq>0?fmtUSD(tc/tq):'—', '#F87171')}
+    </div>
+    ${section('Cost by User Category', `
+      <div style="font-size:11px;color:var(--text2);margin-bottom:12px">Who is costing you money vs who is paying</div>
+      ${table(
+        [{label:'Category',render:r=>`<span style="color:${r.color};font-weight:600">${r.label}</span>`},
+         {label:'Users',align:'right',render:r=>fmt(r.users)},
+         {label:'Queries',align:'right',render:r=>fmt(r.queries)},
+         {label:'API Cost',align:'right',render:r=>'$'+r.cost.toFixed(4)},
+         {label:'Revenue',align:'right',render:r=>r.revenue},
+         {label:'Net',align:'right',render:r=>`<span style="color:${r.net>=0?'var(--green)':'var(--red)'}">${r.net>=0?'+':''}$${r.net.toFixed(2)}</span>`}],
+        [
+          {label:'Paid (Polar)', color:'#6EE7B7', users:pu, queries:paidQ, cost:paidCost, revenue:'$'+(pu*5.99).toFixed(2)+'/mo', net:(pu*5.99)-paidCost},
+          {label:'Admin', color:'#555', users:admin.length, queries:adminQ, cost:adminCost, revenue:'$0', net:-adminCost},
+          {label:'Promo', color:'#FCD34D', users:promo.length, queries:promoQ, cost:promoCost, revenue:'$0', net:-promoCost},
+          {label:'Granted', color:'#38BDF8', users:granted.length, queries:grantedQ, cost:grantedCost, revenue:'$0', net:-grantedCost},
+          {label:'Free Tier', color:'#818CF8', users:free.length, queries:freeQ, cost:freeCost, revenue:'$0', net:-freeCost},
+        ]
+      )}
+    `)}
+    ${section('Daily Breakdown (excludes admin)', table(
+      [{label:'Date',render:r=>r.date},
+       {label:'Queries',align:'right',render:r=>fmt(r.queries)},
+       {label:'Users',align:'right',render:r=>fmt(r.unique_users)},
+       {label:'In Tokens',align:'right',render:r=>fmt(r.input_tokens)},
+       {label:'Out Tokens',align:'right',render:r=>fmt(r.output_tokens)},
+       {label:'Cost',align:'right',render:r=>'$'+Number(r.cost||0).toFixed(4)},
+       {label:'Cost/Q',align:'right',render:r=>r.queries>0?fmtUSD(r.cost/r.queries):'—'}],
+      [...daily].reverse()
+    ))}`;
+}
+
+function renderPromos() {
+  if (!state.promos.length && state.token) loadPromos();
+  return `
+    ${section('Create Promo Code', `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input class="input input-sm mono" id="promo-prefix" placeholder="PREFIX" style="width:130px">
+        <label style="font-size:10px;color:#666">Days: <input class="input input-sm" type="number" id="promo-days" value="30" style="width:55px;margin-left:3px"></label>
+        <label style="font-size:10px;color:#666">Max: <input class="input input-sm" type="number" id="promo-max" value="100" style="width:65px;margin-left:3px"></label>
+        <button class="btn-action" onclick="createPromo()">Create</button>
+        <span id="promo-msg" style="font-size:12px;color:var(--green)"></span>
+      </div>
+    `)}
+    ${section('Promo Codes', state.promos.length ? state.promos.map((p,pi) => `
+      <div style="border-bottom:${pi<state.promos.length-1?'1px solid #1A1A1E':'none'};padding:12px 0">
+        <div style="display:flex;align-items:center;gap:12px;cursor:pointer" onclick="togglePromo(${pi})">
+          <span class="mono" style="font-size:13px;color:var(--white);font-weight:600">${p.code}</span>
+          ${badge(p.is_active ? 'active' : 'expired')}
+          <span style="font-size:11px;color:#666">${p.free_days}d · ${p.times_used}/${p.max_uses} used</span>
+          <span style="font-size:11px;color:#444;margin-left:auto">${fmtDate(p.created_at)}</span>
+          ${p.is_active ? `<button class="btn-danger" onclick="event.stopPropagation();deactivatePromo('${p.code}')">Deactivate</button>` : ''}
+        </div>
+        <div id="promo-detail-${pi}" style="display:none;margin-top:10px;margin-left:16px">
+          ${p.redeemed_by?.length ? table(
+            [{label:'Email',render:r=>`<span style="color:#CCC">${r.email}</span>`},
+             {label:'Redeemed',render:r=>fmtDate(r.redeemed_at)},
+             {label:'Queries',align:'right',render:r=>fmt(r.total_queries)},
+             {label:'Tokens',align:'right',render:r=>fmt(r.total_tokens)},
+             {label:'Last Active',render:r=>fmtDate(r.last_active)}],
+            p.redeemed_by
+          ) : '<div class="empty">No redemptions</div>'}
+        </div>
+      </div>
+    `).join('') : '<div class="empty">No promo codes yet</div>')}`;
+}
+
+window.togglePromo = function(idx) {
+  const el = document.getElementById(`promo-detail-${idx}`);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+};
+
+window.createPromo = async function() {
+  const prefix = document.getElementById('promo-prefix')?.value?.toUpperCase();
+  const free_days = parseInt(document.getElementById('promo-days')?.value) || 30;
+  const max_uses = parseInt(document.getElementById('promo-max')?.value) || 100;
+  if (!prefix) return;
+  const res = await authFetch('/api/admin/promo/create', { method: 'POST', body: JSON.stringify({ prefix, free_days, max_uses }) });
+  const msg = document.getElementById('promo-msg');
+  if (msg) { msg.textContent = res?.code ? `Created: ${res.code}` : 'Failed'; setTimeout(() => msg.textContent = '', 3000); }
+  if (document.getElementById('promo-prefix')) document.getElementById('promo-prefix').value = '';
+  loadPromos();
+};
+
+window.deactivatePromo = async function(code) {
+  await authFetch(`/api/admin/promo/deactivate/${code}`, { method: 'POST' });
+  loadPromos();
+};
+
+function renderSystem() {
+  return `
+    ${section('Backend Health', '<div id="health-status">Checking...</div>')}
+    ${section('Configuration', `<div class="mono" style="font-size:12px;color:var(--text2);line-height:2">
+      ${[['Backend',API],['Model','claude-haiku-4-5-20251001'],['Max Tokens','2048'],['Free Queries','5/device (lifetime)'],['Paid Limit','50/day (200 admin)'],['Referral','3 friends = 30 days'],['Price','$5.99/mo early bird'],['Payments','Polar'],['Hosting','Railway + PostgreSQL']].map(([k,v])=>`${k}: <span style="color:var(--white)">${v}</span>`).join('<br>')}
+    </div>`)}
+    ${section('Backend TODOs', `<div class="mono" style="font-size:11px;color:var(--text3);line-height:2.2">
+      ${['GET /api/admin/stats → add device funnel counts','GET /api/admin/devices → paginated device list','GET /api/admin/referrals → aggregated referral stats','GET /api/download → redirect + log (new downloads table)','POST /api/events → website analytics (new events table)','payments table → store Polar webhook amounts','POST /api/auth/reset-password'].map(t=>`<div style="border-bottom:1px solid #141416;padding:3px 0"><span style="color:var(--yellow);margin-right:8px">TODO</span>${t}</div>`).join('')}
+    </div>`)}`;
+}
+
+// ─── RENDER ───
+const NAV = [
+  { id: 'dashboard', label: 'Dashboard', icon: '◉' },
+  { id: 'users', label: 'Users', icon: '◎' },
+  { id: 'economics', label: 'Unit Economics', icon: '◈' },
+  { id: 'promos', label: 'Promo Codes', icon: '✦' },
+  { id: 'system', label: 'System', icon: '⊞' },
+];
+
+function render() {
+  const app = document.getElementById('app');
+
+  if (!state.token) {
+    app.innerHTML = `
+      <div class="login-wrap">
+        <div class="login-box">
+          <div class="login-title">Presto AI</div>
+          <div class="login-sub">Admin</div>
+          <div class="login-form">
+            <input class="input" type="email" id="login-email" placeholder="Email">
+            <input class="input" type="password" id="login-password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+            <button class="login-btn" onclick="doLogin()" ${state.loginLoading?'disabled':''}>${state.loginLoading?'...':'Sign In'}</button>
+          </div>
+          ${state.loginError ? `<div class="login-error">${state.loginError}</div>` : ''}
+        </div>
+      </div>`;
+    return;
+  }
+
+  let pageContent = '';
+  let pageTitle = '';
+
+  if (state.selectedUser) {
+    pageContent = renderUserDetail();
+    pageTitle = 'User Detail';
+  } else {
+    switch (state.page) {
+      case 'dashboard': pageContent = renderDashboard(); pageTitle = 'Dashboard'; break;
+      case 'users': pageContent = renderUsers(); pageTitle = 'Users'; break;
+      case 'economics': pageContent = renderEconomics(); pageTitle = 'Unit Economics'; break;
+      case 'promos': pageContent = renderPromos(); pageTitle = 'Promo Codes'; break;
+      case 'system': pageContent = renderSystem(); pageTitle = 'System'; break;
+      default: pageContent = renderDashboard(); pageTitle = 'Dashboard';
+    }
+  }
+
+  app.innerHTML = `
+    <div class="app">
+      <div class="sidebar">
+        <div class="sidebar-brand">
+          <div class="sidebar-logo">P</div>
+          <div><div class="sidebar-title">Presto AI</div><div class="sidebar-sub">Admin</div></div>
+        </div>
+        <div class="sidebar-nav">
+          ${NAV.map(n => `<button class="nav-btn ${state.page===n.id?'active':''}" onclick="navigate('${n.id}')"><span class="nav-icon">${n.icon}</span><span>${n.label}</span></button>`).join('')}
+        </div>
+        <div class="sidebar-footer">
+          <button onclick="logout()">Sign Out</button>
+          ${state.lastRefresh ? `<div style="margin-top:3px;font-size:8px;color:#2A2A2E">Updated ${state.lastRefresh.toLocaleTimeString()}</div>` : ''}
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-header">
+          <h2>${pageTitle}</h2>
+          <button class="btn-refresh" onclick="loadAll()" ${state.loading?'disabled':''}>${state.loading?'...':'Refresh'}</button>
+        </div>
+        <div class="fade-in">${pageContent}</div>
+      </div>
+    </div>`;
+
+  // Post-render: health check
+  if (state.page === 'system' && !state.selectedUser) {
+    fetch(`${API}/health`).then(r=>r.json()).then(h => {
+      const el = document.getElementById('health-status');
+      if (el) el.innerHTML = `<div style="display:flex;gap:12px;align-items:center">
+        <div style="width:10px;height:10px;border-radius:50%;background:${h.status==='ok'?'var(--green)':'var(--red)'};box-shadow:0 0 8px ${h.status==='ok'?'#6EE7B744':'#F8717144'}"></div>
+        <div><div style="color:var(--white);font-size:13px;font-weight:600">${h.status==='ok'?'All Systems Operational':'Issues Detected'}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">DB: ${h.db||'?'} · v${h.version||'?'}</div></div>
+      </div>`;
+    });
+  }
+}
+
+window.navigate = function(page) {
+  state.page = page; state.selectedUser = null; state.selectedUserDetail = null;
+  if (page === 'promos') loadPromos();
+  render();
+};
+
+window.doLogin = function() {
+  const email = document.getElementById('login-email')?.value;
+  const password = document.getElementById('login-password')?.value;
+  if (email && password) apiLogin(email, password);
+};
+
+// ─── INIT ───
+render();
+if (state.token) loadAll();
+setInterval(() => { if (state.token) loadAll(); }, 60000);
+</script>
+</body>
+</html>
