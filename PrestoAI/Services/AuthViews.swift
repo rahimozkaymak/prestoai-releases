@@ -4,6 +4,7 @@ import AppKit
 // MARK: - Upgrade Prompt (when free tier exhausted)
 
 struct UpgradePromptView: View {
+    @Environment(\.colorScheme) var colorScheme
     var onCreateAccount: () -> Void
     var onPromoCode: () -> Void
     var onDismiss: () -> Void
@@ -19,27 +20,27 @@ struct UpgradePromptView: View {
                 Image(nsImage: nsImage)
                     .resizable()
                     .renderingMode(.template)
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(Theme.text1(colorScheme))
                     .frame(width: 48, height: 48)
             } else {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 48))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(Theme.text1(colorScheme))
             }
             
             Text("You've used all your free analyses")
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
             
             Text("Unlock unlimited for $5.99/month")
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(Theme.text2(colorScheme))
             
             VStack(spacing: 12) {
                 Button(action: onCreateAccount) {
                     Text("Create Account")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
                         .background(Color.blue)
@@ -50,10 +51,10 @@ struct UpgradePromptView: View {
                 Button(action: onPromoCode) {
                     Text("I have a code")
                         .font(.system(size: 14))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(Theme.text2(colorScheme))
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(Color.white.opacity(0.1))
+                        .background(Theme.inputBg(colorScheme))
                         .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
@@ -61,7 +62,7 @@ struct UpgradePromptView: View {
                 Button(action: onDismiss) {
                     Text("Not now")
                         .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(Theme.text3(colorScheme))
                 }
                 .buttonStyle(.plain)
             }
@@ -69,15 +70,16 @@ struct UpgradePromptView: View {
         }
         .padding(32)
         .frame(width: 420, height: 420)
-        .background(Color(red: 0.039, green: 0.039, blue: 0.039))
+        .background(Theme.bg(colorScheme))
     }
 }
 
 // MARK: - Account Creation/Sign In View
 
 struct AccountView: View {
+    @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var isSignIn = false
     @State private var email = ""
     @State private var password = ""
@@ -95,25 +97,25 @@ struct AccountView: View {
             VStack(spacing: 8) {
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(Theme.text1(colorScheme))
                 
                 Text(isSignIn ? "Sign In" : "Create Account")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.text1(colorScheme))
             }
             
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Email")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(Theme.text4(colorScheme))
                     
                     TextField("you@example.com", text: $email)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                         .padding(12)
-                        .background(Color.white.opacity(0.1))
+                        .background(Theme.inputBg(colorScheme))
                         .cornerRadius(8)
                         .autocorrectionDisabled()
                 }
@@ -121,14 +123,14 @@ struct AccountView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Password")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(Theme.text4(colorScheme))
 
                     SecureField("••••••••", text: $password)
                         .textFieldStyle(.plain)
                         .font(.system(size: 14))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                         .padding(12)
-                        .background(Color.white.opacity(0.1))
+                        .background(Theme.inputBg(colorScheme))
                         .cornerRadius(8)
                 }
                 
@@ -149,7 +151,7 @@ struct AccountView: View {
                     } else {
                         Text(isSignIn ? "Sign In" : "Continue")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
+                            .foregroundColor(Theme.text1(colorScheme))
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
                     }
@@ -162,7 +164,7 @@ struct AccountView: View {
                 Button(action: { isSignIn.toggle(); errorMessage = "" }) {
                     Text(isSignIn ? "Don't have an account? Create one" : "Already have an account? Sign in")
                         .font(.system(size: 13))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
 
@@ -170,11 +172,11 @@ struct AccountView: View {
                     TextField("Enter code", text: $promoCode)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.08))
+                        .background(Theme.subtleBorder(colorScheme))
                         .cornerRadius(5)
                         .autocorrectionDisabled()
                         .frame(width: 160, height: 20)
@@ -182,7 +184,7 @@ struct AccountView: View {
                     Button(action: { showPromoField = true }) {
                         Text("I have a code")
                             .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(Theme.text3(colorScheme))
                     }
                     .buttonStyle(.plain)
                 }
@@ -191,7 +193,7 @@ struct AccountView: View {
         }
         .padding(32)
         .frame(width: 420, height: 420)
-        .background(Color(red: 0.039, green: 0.039, blue: 0.039))
+        .background(Theme.bg(colorScheme))
         .onAppear { showPromoField = openPromoField }
     }
 
@@ -260,8 +262,9 @@ struct AccountView: View {
 // MARK: - Checkout Status View
 
 struct CheckoutStatusView: View {
+    @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var statusMessage = "Waiting for payment..."
     @State private var isPolling = true
     @State private var pollingTask: Task<Void, Never>?
@@ -278,11 +281,11 @@ struct CheckoutStatusView: View {
             
             Text(statusMessage)
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(Theme.text2(colorScheme))
             
             Text("Complete your purchase in the browser window")
                 .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(Theme.text3(colorScheme))
                 .multilineTextAlignment(.center)
             
             Button(action: {
@@ -291,13 +294,13 @@ struct CheckoutStatusView: View {
             }) {
                 Text("Cancel")
                     .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(Theme.text4(colorScheme))
             }
             .buttonStyle(.plain)
         }
         .padding(40)
         .frame(width: 420, height: 420)
-        .background(Color(red: 0.039, green: 0.039, blue: 0.039))
+        .background(Theme.bg(colorScheme))
         .onAppear {
             openCheckoutInBrowser()
             startPolling()
