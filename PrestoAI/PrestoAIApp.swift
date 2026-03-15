@@ -29,11 +29,10 @@ func makePrestoPanel(size: NSSize, title: String = "") -> NSPanel {
     panel.titlebarAppearsTransparent = true
     panel.titleVisibility = .hidden
     panel.isMovableByWindowBackground = true
-    panel.backgroundColor = NSColor(red: 0.039, green: 0.039, blue: 0.039, alpha: 1.0)
+    panel.backgroundColor = Theme.nsBg(NSApp.effectiveAppearance)
     panel.isReleasedWhenClosed = false
     panel.center()
     panel.level = .floating
-    panel.appearance = NSAppearance(named: .darkAqua)
     return panel
 }
 
@@ -147,9 +146,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.backgroundColor = NSColor(red: 0.039, green: 0.039, blue: 0.039, alpha: 1.0)
+        window.backgroundColor = Theme.nsBg(NSApp.effectiveAppearance)
         window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .darkAqua)
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -291,6 +289,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     },
                     onComplete: { [weak self] queriesRemaining, state in
                         Task { @MainActor in
+                            self?.overlayManager?.signalStreamEnd()
                             stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                             self?.refreshMenuState()
                         }
