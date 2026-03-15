@@ -164,7 +164,7 @@ struct SettingsView: View {
                 TextEditor(text: $defaultPrompt)
                     .font(.system(size: 13))
                     .foregroundColor(Theme.text1(colorScheme))
-                    .scrollContentBackground(.hidden)
+                    .if_available_scrollContentBackgroundHidden()
                     .padding(10)
                     .background(Theme.subtleBorder(colorScheme))
                     .cornerRadius(8)
@@ -248,6 +248,17 @@ struct SettingsView: View {
 
     private func resetDefaultPrompt() {
         defaultPrompt = "Help me solve this problem. Be clear and concise. Use proper mathematical notation and LaTeX formatting for any math expressions."
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func if_available_scrollContentBackgroundHidden() -> some View {
+        if #available(macOS 13.0, *) {
+            self.scrollContentBackground(.hidden)
+        } else {
+            self
+        }
     }
 }
 
