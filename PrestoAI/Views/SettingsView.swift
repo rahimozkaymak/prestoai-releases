@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAtLoginManager.shared.isEnabled
     @State private var showSignOut = false
     @State private var selectedTab: SettingsTab
+    @Environment(\.colorScheme) var colorScheme
 
     var onUpgrade: (() -> Void)?
 
@@ -31,7 +32,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .tint(Color(white: 0.55))
+                .tint(Theme.text3(colorScheme))
                 .padding(.top, 20)
                 .padding(.bottom, 8)
 
@@ -45,8 +46,7 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .frame(width: 420, height: 420)
-        .background(Color(red: 0.039, green: 0.039, blue: 0.039))
-        .preferredColorScheme(.dark)
+        .background(Theme.bg(colorScheme))
         .alert("Sign Out", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
@@ -73,16 +73,16 @@ struct SettingsView: View {
                 } else {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 44))
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                 }
 
                 Text(stateManager.currentState == .paid ? "Pro Account" : "Free Tier")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.text1(colorScheme))
 
                 Text(accountSubtitle)
                     .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(Theme.text3(colorScheme))
                     .multilineTextAlignment(.center)
             }
             .padding(.top, 28)
@@ -94,17 +94,17 @@ struct SettingsView: View {
                     Button(action: { onUpgrade?() }) {
                         Text("Upgrade to Pro")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(Theme.text2(colorScheme))
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
-                            .background(Color.white.opacity(0.07))
+                            .background(Theme.subtleBg(colorScheme))
                             .cornerRadius(8)
                     }
                     .buttonStyle(.plain)
 
                     Text("Unlimited analyses · $5.99/month")
                         .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.35))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .padding(.bottom, 20)
             }
@@ -120,10 +120,10 @@ struct SettingsView: View {
                 }) {
                     Text("Manage Subscription")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(Theme.text2(colorScheme))
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(Color.white.opacity(0.07))
+                        .background(Theme.subtleBg(colorScheme))
                         .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
@@ -132,10 +132,10 @@ struct SettingsView: View {
                 Button(action: { showSignOut = true }) {
                     Text("Sign Out")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(Theme.text2(colorScheme))
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(Color.white.opacity(0.07))
+                        .background(Theme.subtleBg(colorScheme))
                         .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
@@ -155,25 +155,25 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Default Prompt")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(Theme.text4(colorScheme))
                     Text("Sent with every screenshot analysis")
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.35))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
 
                 TextEditor(text: $defaultPrompt)
                     .font(.system(size: 13))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.text1(colorScheme))
                     .scrollContentBackground(.hidden)
                     .padding(10)
-                    .background(Color.white.opacity(0.08))
+                    .background(Theme.subtleBorder(colorScheme))
                     .cornerRadius(8)
                     .frame(height: 90)
 
                 Button(action: resetDefaultPrompt) {
                     Text("Reset to Default")
                         .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
             }
@@ -186,12 +186,12 @@ struct SettingsView: View {
             HStack {
                 Text("Launch at Login")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(Theme.text2(colorScheme))
                 Spacer()
                 Toggle("", isOn: $launchAtLogin)
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .tint(Color(white: 0.5))
+                    .tint(Theme.text3(colorScheme))
                     .onChange(of: launchAtLogin) { enabled in
                         enabled ? LaunchAtLoginManager.shared.enable()
                                 : LaunchAtLoginManager.shared.disable()
@@ -200,7 +200,7 @@ struct SettingsView: View {
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity)
             .frame(height: 44)
-            .background(Color.white.opacity(0.07))
+            .background(Theme.subtleBg(colorScheme))
             .cornerRadius(8)
             .padding(.top, 16)
 
@@ -209,10 +209,10 @@ struct SettingsView: View {
             }) {
                 Text("Run Setup Again")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(Theme.text2(colorScheme))
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .background(Color.white.opacity(0.07))
+                    .background(Theme.subtleBg(colorScheme))
                     .cornerRadius(8)
             }
             .buttonStyle(.plain)
@@ -221,7 +221,7 @@ struct SettingsView: View {
             // Version
             Text("v1.0.0")
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.25))
+                .foregroundColor(Theme.text4(colorScheme))
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.top, 20)
                 .padding(.bottom, 16)
@@ -242,7 +242,7 @@ struct SettingsView: View {
 
     private var rowDivider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.07))
+            .fill(Theme.subtleBg(colorScheme))
             .frame(height: 1)
     }
 
