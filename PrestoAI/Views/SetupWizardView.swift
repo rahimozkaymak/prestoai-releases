@@ -11,22 +11,6 @@ private func prestoLogoImage(size: CGFloat) -> Image {
     return Image(nsImage: nsImg)
 }
 
-// MARK: - Color palette
-private enum WZ {
-    static let bg        = Color(red: 0.039, green: 0.039, blue: 0.039)  // #0A0A0A
-    static let surface   = Color(red: 0.110, green: 0.110, blue: 0.110)  // #1C1C1C
-    static let border    = Color(red: 0.165, green: 0.165, blue: 0.165)  // #2A2A2A
-    static let keyBg     = Color(red: 0.133, green: 0.133, blue: 0.133)  // #222
-    static let keyBorder = Color(red: 0.200, green: 0.200, blue: 0.200)  // #333
-    static let keyActive = Color(red: 0.180, green: 0.180, blue: 0.180)  // #2E2E2E
-    static let keyFlash  = Color(red: 0.220, green: 0.220, blue: 0.220)  // #383838
-    static let text1     = Color(red: 0.878, green: 0.878, blue: 0.878)  // #E0E0E0
-    static let text2     = Color(red: 0.467, green: 0.467, blue: 0.467)  // #777
-    static let text3     = Color(red: 0.333, green: 0.333, blue: 0.333)  // #555
-    static let text4     = Color(red: 0.400, green: 0.400, blue: 0.400)  // #666
-    static let textDot   = Color(red: 0.533, green: 0.533, blue: 0.533)  // #888
-}
-
 // MARK: - Persisted Onboarding State
 enum OnboardingState: Int {
     case notStarted = 0        // Fresh install, show welcome
@@ -84,7 +68,9 @@ struct SetupWizardView: View {
     @State private var referralMessage = ""
     @State private var referralIsError = false
     @State private var isSubmittingReferral = false
-    
+
+    @Environment(\.colorScheme) var colorScheme
+
     private let totalSteps = 3
     
     var body: some View {
@@ -110,7 +96,7 @@ struct SetupWizardView: View {
             bottomDots
         }
         .frame(width: 600, height: 520)
-        .background(WZ.bg)
+        .background(Theme.bg(colorScheme))
         .onAppear {
             startPolling()
             stepEnteredTime = Date()
@@ -150,14 +136,14 @@ struct SetupWizardView: View {
                 Text("Welcome")
                     .font(.system(size: 49, weight: .light))
                     .tracking(-0.5)
-                    .foregroundColor(WZ.text1)
+                    .foregroundColor(Theme.text1(colorScheme))
                     .opacity(showWelcome ? 1 : 0)
                     .offset(y: showWelcome ? 0 : 14)
                 
                 Text("to")
                     .font(.system(size: 49, weight: .light))
                     .tracking(-0.5)
-                    .foregroundColor(WZ.text1)
+                    .foregroundColor(Theme.text1(colorScheme))
                     .opacity(showTo ? 1 : 0)
                     .offset(y: showTo ? 0 : 14)
             }
@@ -168,27 +154,27 @@ struct SetupWizardView: View {
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.text1(colorScheme))
                     .frame(width: 46, height: 46)
 
                 HStack(spacing: 0) {
                     Text("presto")
                         .font(.system(size: 55, weight: .semibold))
                         .tracking(-2)
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                     Text(".")
                         .font(.system(size: 55, weight: .semibold))
                         .tracking(-2)
-                        .foregroundColor(WZ.textDot)
+                        .foregroundColor(Theme.textDot(colorScheme))
                     Text("ai")
                         .font(.system(size: 55, weight: .semibold))
                         .tracking(-2)
-                        .foregroundColor(.white)
+                        .foregroundColor(Theme.text1(colorScheme))
                 }
             }
             .opacity(showBrand ? 1 : 0)
             .offset(y: showBrand ? 0 : 14)
-            .shadow(color: brandGlow ? .white.opacity(0.8) : .clear, radius: brandGlow ? 30 : 0)
+            .shadow(color: brandGlow ? Theme.glowColor(colorScheme).opacity(0.8) : .clear, radius: brandGlow ? 30 : 0)
             .padding(.top, 10)
             
             Spacer()
@@ -239,13 +225,13 @@ struct SetupWizardView: View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 57, weight: .light))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
                 .opacity(showGrantedCheck ? 1 : 0)
                 .scaleEffect(showGrantedCheck ? 1 : 0.5)
             
             Text("Permission granted")
                 .font(.system(size: 25, weight: .light))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
                 .tracking(0.3)
                 .opacity(showGrantedText ? 1 : 0)
                 .offset(y: showGrantedText ? 0 : 6)
@@ -257,18 +243,18 @@ struct SetupWizardView: View {
             // Icon + title (centered)
             Image(systemName: "rectangle.dashed.badge.record")
                 .font(.system(size: 45, weight: .light))
-                .foregroundColor(WZ.text2)
+                .foregroundColor(Theme.text2(colorScheme))
             
             Text("Screen Recording")
                 .font(.system(size: 29, weight: .medium))
                 .tracking(-0.5)
-                .foregroundColor(WZ.text1)
+                .foregroundColor(Theme.text1(colorScheme))
                 .padding(.top, 14)
             
             // Explanation
             Text("Presto.AI needs this to capture the region you select")
                 .font(.system(size: 19, weight: .light))
-                .foregroundColor(WZ.text2)
+                .foregroundColor(Theme.text2(colorScheme))
                 .multilineTextAlignment(.center)
                 .padding(.top, 10)
             
@@ -278,11 +264,11 @@ struct SetupWizardView: View {
             VStack(spacing: 8) {
                 Text("Find **Presto.AI** in the list and toggle it on")
                     .font(.system(size: 18, weight: .light))
-                    .foregroundColor(WZ.text4)
+                    .foregroundColor(Theme.text4(colorScheme))
                 
                 Text("If prompted, click \"Quit & Reopen\"")
                     .font(.system(size: 18, weight: .light))
-                    .foregroundColor(WZ.text4)
+                    .foregroundColor(Theme.text4(colorScheme))
             }
         }
     }
@@ -321,7 +307,7 @@ struct SetupWizardView: View {
             Text("Ready when you are.")
                 .font(.system(size: 47, weight: .light))
                 .tracking(-1)
-                .foregroundColor(WZ.text1)
+                .foregroundColor(Theme.text1(colorScheme))
                 .opacity(showReadyText ? 1 : 0)
                 .offset(y: showReadyText ? 0 : 10)
             
@@ -336,7 +322,7 @@ struct SetupWizardView: View {
             
             Text("Presto.AI lives in your menu bar.\nLook for the wand icon at the top of your screen.")
                 .font(.system(size: 18, weight: .light))
-                .foregroundColor(WZ.text3)
+                .foregroundColor(Theme.text3(colorScheme))
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
                 .opacity(showMenuHint ? 1 : 0)
@@ -350,7 +336,7 @@ struct SetupWizardView: View {
                     }) {
                         Text("Have a referral code?")
                             .font(.system(size: 13, weight: .regular))
-                            .foregroundColor(WZ.text4)
+                            .foregroundColor(Theme.text4(colorScheme))
                             .underline()
                     }
                     .buttonStyle(.plain)
@@ -359,10 +345,10 @@ struct SetupWizardView: View {
                         TextField("PRESTO-XXXXXX", text: $referralCodeInput)
                             .textFieldStyle(.plain)
                             .font(.system(size: 14))
-                            .foregroundColor(.white)
+                            .foregroundColor(Theme.text1(colorScheme))
                             .padding(8)
                             .frame(width: 180)
-                            .background(Color.white.opacity(0.08))
+                            .background(Theme.subtleBorder(colorScheme))
                             .cornerRadius(6)
                             .autocorrectionDisabled()
 
@@ -374,13 +360,13 @@ struct SetupWizardView: View {
                             } else {
                                 Text("Apply")
                                     .font(.system(size: 13, weight: .medium))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Theme.text1(colorScheme))
                             }
                         }
                         .buttonStyle(.plain)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(Color.white.opacity(0.10))
+                        .background(Theme.inputBg(colorScheme))
                         .cornerRadius(6)
                         .disabled(referralCodeInput.isEmpty || isSubmittingReferral)
                     }
@@ -408,20 +394,20 @@ struct SetupWizardView: View {
                 Text(label)
                     .font(.system(size: 11, weight: .regular))
                     .tracking(0.5)
-                    .foregroundColor(WZ.text4)
+                    .foregroundColor(Theme.text4(colorScheme))
             }
         }
-        .foregroundColor(isLit ? Color(white: 0.867) : Color(white: 0.6))
+        .foregroundColor(isLit ? Theme.keyText(colorScheme) : Theme.keyTextDim(colorScheme))
         .frame(width: width, height: height)
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isFlash ? WZ.keyFlash : (isLit ? WZ.keyActive : WZ.keyBg))
+                    .fill(isFlash ? Theme.keyFlash(colorScheme) : (isLit ? Theme.keyActive(colorScheme) : Theme.keyBg(colorScheme)))
                 if isLit {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(
                             RadialGradient(
-                                colors: [Color.white.opacity(0.07), .clear],
+                                colors: [Theme.subtleBg(colorScheme), .clear],
                                 center: .center,
                                 startRadius: 0,
                                 endRadius: 50
@@ -433,9 +419,9 @@ struct SetupWizardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(WZ.keyBorder, lineWidth: 1)
+                .stroke(Theme.keyBorder(colorScheme), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.6), radius: 6, y: 3)
+        .shadow(color: Theme.shadowColor(colorScheme), radius: 6, y: 3)
         .animation(.easeOut(duration: 0.3), value: isLit)
         .animation(.easeInOut(duration: 0.15), value: isFlash)
     }
@@ -486,7 +472,7 @@ struct SetupWizardView: View {
                 // Subtitle sits above the button
                 Text("Let's get you set up in under a minute")
                     .font(.system(size: 17, weight: .light))
-                    .foregroundColor(WZ.text2)
+                    .foregroundColor(Theme.text2(colorScheme))
                     .tracking(0.3)
                     .opacity(showSubtitle ? 1 : 0)
                     .offset(y: showSubtitle ? 0 : 8)
@@ -515,7 +501,7 @@ struct SetupWizardView: View {
 
                     Text("Toggle Presto.AI on, then click \"Quit & Reopen\" when prompted")
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(WZ.text3)
+                        .foregroundColor(Theme.text3(colorScheme))
                         .multilineTextAlignment(.center)
                         .padding(.top, 6)
                 }
@@ -540,14 +526,14 @@ struct SetupWizardView: View {
         Button(action: action) {
             Text(label)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(Color.white.opacity(0.10))
+                .background(Theme.inputBg(colorScheme))
                 .cornerRadius(8)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(Theme.subtleBorder(colorScheme), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -563,7 +549,7 @@ struct SetupWizardView: View {
         HStack(spacing: 6) {
             ForEach(0..<totalSteps, id: \.self) { i in
                 Circle()
-                    .fill(i <= currentStep ? Color.white.opacity(0.25) : Color.white.opacity(0.06))
+                    .fill(i <= currentStep ? Theme.text4(colorScheme) : Theme.subtleBg(colorScheme))
                     .frame(width: 5, height: 5)
                     .animation(.easeInOut(duration: 0.3), value: currentStep)
             }
