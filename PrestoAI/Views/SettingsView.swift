@@ -102,7 +102,7 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Text("Unlimited analyses · $5.99/month")
+                    Text("Unlimited analyses · \(stateManager.cachedPrice)")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.text4(colorScheme))
                 }

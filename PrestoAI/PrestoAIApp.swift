@@ -88,7 +88,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Use Combine or a simple polling approach since AppDelegate isn't a SwiftUI view
         setupStateObserver()
 
-        print("[Presto.AI] App launched — Cmd+Shift+X to capture, ESC to dismiss")
+        print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, ESC to dismiss")
     }
     
     // FIX #7: Observe state changes from AppStateManager
@@ -256,16 +256,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("[Presto.AI] Hotkey triggered capture")
             self?.captureScreenshot()
         }
+        hotkeys.onQuickPrompt = { [weak self] in
+            print("[Presto.AI] Hotkey triggered quick prompt")
+            self?.quickPromptCapture()
+        }
         hotkeys.onEsc = { [weak self] in
             self?.overlayManager?.dismiss()
         }
         hotkeys.registerCapture()
+        hotkeys.registerQuickPrompt()
     }
     
     // MARK: - Actions
     
     @objc private func captureScreenshot() {
         let stateManager = AppStateManager.shared
+
+        if stateManager.isOffline {
+            overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+            return
+        }
 
         if !stateManager.canAnalyze {
             showPaywall()
@@ -292,6 +302,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             self?.overlayManager?.signalStreamEnd()
                             stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                             self?.refreshMenuState()
+                            // Usage warning for paid users approaching daily limit
+                            if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
+                                self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
+                            }
                         }
                     },
                     onError: { [weak self] error in
@@ -315,6 +329,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    private func quickPromptCapture() {
+        let stateManager = AppStateManager.shared
+
+        if stateManager.isOffline {
+            overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+            return
+        }
+
+        if !stateManager.canAnalyze {
+            showPaywall()
+            return
+        }
+
+        Task {
+            do {
+                let screenshot = try await ScreenCaptureService.captureInteractive()
+                await MainActor.run {
+                    self.overlayManager?.onPromptSubmit = { [weak self] prompt in
+                        self?.sendWithPrompt(screenshot: screenshot, prompt: prompt)
+                    }
+                    self.overlayManager?.showPromptInput()
+                }
+            } catch {
+                if let captureError = error as? CaptureError, captureError == .cancelled {
+                    print("[Presto.AI] Screenshot cancelled by user")
+                    return
+                }
+                await MainActor.run { self.overlayManager?.showError(error.localizedDescription) }
+            }
+        }
+    }
+
+    private func sendWithPrompt(screenshot: String, prompt: String) {
+        let stateManager = AppStateManager.shared
+        overlayManager?.dismiss()
+
+        // Small delay to let dismiss complete before showing loading
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.overlayManager?.showLoading()
+
+            var isFirstChunk = true
+            APIService.shared.sendScreenshot(screenshot, prompt: prompt,
+                onChunk: { [weak self] chunk in
+                    guard let self = self else { return }
+                    if isFirstChunk {
+                        isFirstChunk = false
+                        self.overlayManager?.showResponse("")
+                    }
+                    self.overlayManager?.appendChunk(chunk)
+                },
+                onComplete: { [weak self] queriesRemaining, state in
+                    Task { @MainActor in
+                        self?.overlayManager?.signalStreamEnd()
+                        stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
+                        self?.refreshMenuState()
+                        if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
+                            self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
+                        }
+                    }
+                },
+                onError: { [weak self] error in
+                    if let apiError = error as? APIError, apiError == .noAccess {
+                        Task { @MainActor in
+                            self?.showPaywall()
+                        }
+                    } else {
+                        self?.overlayManager?.showError(error.localizedDescription)
+                    }
+                }
+            )
+        }
+    }
+
     @objc private func openSettings() {
         if let existing = settingsPanel, existing.isVisible {
             existing.makeKeyAndOrderFront(nil)

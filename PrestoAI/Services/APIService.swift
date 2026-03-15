@@ -356,6 +356,23 @@ class APIService {
         _ = try await post(endpoint: "/api/referral/claim", body: body, authenticated: false)
     }
 
+    // MARK: - Password Reset & Logout
+
+    func requestPasswordReset(email: String) async throws {
+        let body: [String: Any] = ["email": email]
+        _ = try await post(endpoint: "/api/auth/request-reset", body: body, authenticated: false)
+    }
+
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        let body: [String: Any] = ["email": email, "code": code, "newPassword": newPassword]
+        _ = try await post(endpoint: "/api/auth/reset-password", body: body, authenticated: false)
+    }
+
+    func logout(refreshToken: String) async {
+        let body: [String: Any] = ["refreshToken": refreshToken]
+        _ = try? await post(endpoint: "/api/auth/logout", body: body, authenticated: false)
+    }
+
     // MARK: - Profile & Referral
 
     func getProfile() async throws -> UserProfile {
@@ -370,7 +387,7 @@ class APIService {
     
     // MARK: - HTTP Helpers
     
-    private func get(endpoint: String, token: String? = nil) async throws -> Data {
+    private func get(endpoint: String, token: String? = nil, retried: Bool = false) async throws -> Data {
         let urlStr = baseURL + endpoint
         print("[API] GET \(urlStr)")
         guard let url = URL(string: urlStr) else {
@@ -379,25 +396,31 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
         if let token = token ?? accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         // Auto-refresh on 401
         if let http = response as? HTTPURLResponse, http.statusCode == 401, token == nil {
             if await refreshAccessToken() {
                 return try await get(endpoint: endpoint) // retry with new token
             }
         }
-        
+
+        // Retry once on 5xx server errors
+        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), !retried {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return try await get(endpoint: endpoint, token: token, retried: true)
+        }
+
         try handleResponse(response, data: data)
         return data
     }
     
-    private func post(endpoint: String, body: [String: Any], authenticated: Bool = true) async throws -> Data {
+    private func post(endpoint: String, body: [String: Any], authenticated: Bool = true, retried: Bool = false) async throws -> Data {
         let urlStr = baseURL + endpoint
         print("[API] POST \(urlStr)")
         guard let url = URL(string: urlStr) else {
@@ -407,20 +430,26 @@ class APIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
+
         if authenticated, let token = accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         // Auto-refresh on 401 (only for authenticated requests)
         if authenticated, let http = response as? HTTPURLResponse, http.statusCode == 401 {
             if await refreshAccessToken() {
                 return try await post(endpoint: endpoint, body: body, authenticated: true)
             }
         }
-        
+
+        // Retry once on 5xx server errors
+        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), !retried {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return try await post(endpoint: endpoint, body: body, authenticated: authenticated, retried: true)
+        }
+
         try handleResponse(response, data: data)
         return data
     }
@@ -481,8 +510,14 @@ enum ImageCompressor {
             print("[Image] Compressed: \(base64.count) → \(result.count) chars")
             return (result, "image/jpeg")
         }
-        
-        print("[Image] Compression failed, using original")
+
+        // Fallback: resize to PNG at 1024px instead of sending original full-size
+        if let pngResult = resizeAndEncodePNG(nsImage, maxSide: 1024) {
+            print("[Image] JPEG failed, using resized PNG: \(base64.count) → \(pngResult.count) chars")
+            return (pngResult, "image/png")
+        }
+
+        print("[Image] All compression failed, using original")
         return (base64, "image/png")
     }
     
@@ -512,8 +547,38 @@ enum ImageCompressor {
         guard let resizedCG = ctx.makeImage() else { return nil }
         let bitmap = NSBitmapImageRep(cgImage: resizedCG)
         guard let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]) else { return nil }
-        
+
         return jpeg.base64EncodedString()
+    }
+
+    private static func resizeAndEncodePNG(_ image: NSImage, maxSide: CGFloat) -> String? {
+        var size = image.size
+        if size.width > maxSide || size.height > maxSide {
+            let scale = maxSide / max(size.width, size.height)
+            size = NSSize(width: size.width * scale, height: size.height * scale)
+        }
+
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: Int(size.width),
+            height: Int(size.height),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        ctx.interpolationQuality = .high
+        ctx.draw(cgImage, in: CGRect(origin: .zero, size: size))
+
+        guard let resizedCG = ctx.makeImage() else { return nil }
+        let bitmap = NSBitmapImageRep(cgImage: resizedCG)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+
+        return png.base64EncodedString()
     }
 }
 

@@ -12,16 +12,31 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private var resizeMonitor: Any?
     private var resizeStartFrame: NSRect = .zero
     private var resizeStartMouse: NSPoint = .zero
+    private var dragLocalMonitor: Any?
+    private var dragGlobalMonitor: Any?
+    private var dragStartOrigin: NSPoint = .zero
+    private var dragStartMouse: NSPoint = .zero
     private var isPageReady = false
     private var chunkQueue: [String] = []
+    private var isPromptMode = false
 
     private let defaultWidth:  CGFloat = 420
     private let defaultHeight: CGFloat = 340
     private let minWidth:      CGFloat = 260
     private let minHeight:     CGFloat = 180
+    private let promptInputHeight: CGFloat = 100
+
+    /// Callback fired when user submits a quick prompt
+    var onPromptSubmit: ((String) -> Void)?
 
     // Template icon (black + alpha). CSS filter: invert(1) makes it white on dark bg.
     private let iconB64 = "iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAADDElEQVR4nO2YX2jNYRjHP+dsNmwYMskWJeVqKVwQtyhXytxgI5IkIbVLS0vLny32J4mZsWb+XOxSKBnzJ4lbJSklWW6UC6bj4v2+/R6vsz+/82+Up06/8z7v732ez/u8f57nHPgvhZWEPmP1/zVSpGeSHIMlZNSKb9cAKwIAG7WSwE7exDtvAbqJoBOmrxEYBm4CM6ULJxZL/IwWA8sNSAJYIJAfQEpOFwWgKeClnk+AisBubJhSoBhoAPpxsytVXwlQCfQCA8B8YKrGtgqiR+29at/X+KyiBHAH+BzovNE1wHqjPyPnXWr7PdQt/bJg/ITEL8kGoBn4JmNXgFpgCb+fHP88q/cuBTB1wAgwBEwj5qnzJ+QI8EEOUsBPPb8C7bjlSeKWFKBN/ZcDmG3SvwLmBROILVOA1cBHGd0KlBmjfgO3q/+W2n4vbZf+BTBXuoz3j717rgJvTV+RgTkvpyPAe2CV9PXSPwfmmHFZSbGM1AOnBFhiDHfKaSuwDncFDAPH8gFjpVyG7TL5yHSa92qALwZmdi4h0olfwgty2qF2qZ6bge/AoIGpxKWWdOknKxAfmYuCaQtgdkj/DHcjJ3GHohZ3IfrLNOt8ZmfWJafnAhh/mp4SpQcvHbio5SQ6FqabaANbmDrpHwOzpKsAVgKHgU/q7wU2AdWZwlmYHhltCWB2GhibzeuBd/x5qaaAPtz+Gq+wSwuTAK7J0OkAZpf0j4giY4/2dGAt8EbvNQALJwpgJWk+vTJ2MoDZLf0Q6escO/smXLqxfbFgfHT65LRZfT4d7CGKzFhFl7/NN+JKlwTu1GUE0y+nJwIYX9fYDTzeBi0DqvR9wtGxpaeHaQpg9kk/GAMmI/HrXYzL1ingeACzX/qHwIyYMLFPk79BB+S0MYA5IP0DXE6LAxNbfIF1YxSYg0S1cJkZkzcYgKVyej2AOVRIGIiWqxx4jaubt6jvqGDu4S64vMN48U6qcRWhzzkp4G6hYUKoKlzpkAJu434dFBwmhErifn16mdR/LkbLRZMqOS0z/1n5BUqXpG40It4WAAAAAElFTkSuQmCC"
+
+    // MARK: - Inlined streaming-markdown (smd) library — 3kB minified
+    // Source: https://cdn.jsdelivr.net/npm/streaming-markdown/smd.min.js
+    private let smdJS = """
+    var D=2,C=3,h=4,b=5,B=6,U=7,G=8,S=9,x=10,m=11,H=12,K=13,M=14,Q=15,w=16,q=17,W=18,P=19,Y=20,y=21,F=22,$=23,v=24,X=25,j=26,z=27,J=28,V=29,Z=30,p=31;var I=1,k=2,L=4,T=8,f=16;function ee(e){switch(e){case I:return"href";case k:return"src";case L:return"class";case T:return"checked";case f:return"start"}}var ne=e=>{switch(e){case 1:return 3;case 2:return 4;case 3:return 5;case 4:return 6;case 5:return 7;default:return 8}},te=ne;var O=24;function ae(e){let c=new Uint32Array(O);return c[0]=1,{renderer:e,text:"",pending:"",tokens:c,len:0,token:1,fence_end:0,blockquote_idx:0,hr_char:"",hr_chars:0,fence_start:0,spaces:new Uint8Array(O),indent:"",indent_len:0,table_state:0}}function ce(e){e.pending.length>0&&o(e,"\\n")}function a(e){e.text.length!==0&&(e.renderer.add_text(e.renderer.data,e.text),e.text="")}function _(e){e.len-=1,e.token=e.tokens[e.len],e.renderer.end_token(e.renderer.data)}function i(e,c){(e.tokens[e.len]===24||e.tokens[e.len]===23)&&c!==25&&_(e),e.len+=1,e.tokens[e.len]=c,e.token=c,e.renderer.add_token(e.renderer.data,c)}function re(e,c,n){for(;n<=e.len;){if(e.tokens[n]===c)return n;n+=1}return-1}function l(e,c){for(e.fence_start=0;e.len>c;)_(e)}function u(e,c){let n=0;for(let t=0;t<=e.len&&(c-=e.spaces[t],!(c<0));t+=1)switch(e.tokens[t]){case 9:case 10:case 20:case 25:n=t;break}for(;e.len>n;)_(e);return c}function A(e,c){let n=-1,t=-1;for(let s=e.blockquote_idx+1;s<=e.len;s+=1)if(e.tokens[s]===25){if(e.indent_len<e.spaces[s]){t=-1;break}t=s}else e.tokens[s]===c&&(n=s);return t===-1?n===-1?(l(e,e.blockquote_idx),i(e,c),!0):(l(e,n),!1):(l(e,t),i(e,c),!0)}function g(e,c){i(e,25),e.spaces[e.len]=e.indent_len+c,E(e),e.token=103}function E(e){e.indent="",e.indent_len=0,e.pending=""}function N(e){switch(e){case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:return!0;default:return!1}}function ie(e){switch(e){case 32:case 58:case 59:case 41:case 44:case 33:case 46:case 63:case 93:case 10:return!0;default:return!1}}function se(e){return N(e)||ie(e)}function o(e,c){for(let n of c){if(e.token===101){switch(n){case" ":e.indent_len+=1;continue;case"\\t":e.indent_len+=4;continue}let s=u(e,e.indent_len);e.indent_len=0,e.token=e.tokens[e.len],s>0&&o(e," ".repeat(s))}let t=e.pending+n;switch(e.token){case 21:case 1:case 20:case 24:case 23:switch(e.pending[0]){case void 0:e.pending=n;continue;case" ":e.pending=n,e.indent+=" ",e.indent_len+=1;continue;case"\\t":e.pending=n,e.indent+="\\t",e.indent_len+=4;continue;case"\\n":if(e.tokens[e.len]===25&&e.token===21){_(e),E(e),e.pending=n;continue}l(e,e.blockquote_idx),E(e),e.blockquote_idx=0,e.fence_start=0,e.pending=n;continue;case"#":switch(n){case"#":if(e.pending.length<6){e.pending=t;continue}break;case" ":u(e,e.indent_len),i(e,te(e.pending.length)),E(e);continue}break;case">":{let r=re(e,20,e.blockquote_idx+1);r===-1?(l(e,e.blockquote_idx),e.blockquote_idx+=1,e.fence_start=0,i(e,20)):e.blockquote_idx=r,E(e),e.pending=n;continue}case"-":case"*":case"_":if(e.hr_chars===0&&(e.hr_chars=1,e.hr_char=e.pending),e.hr_chars>0){switch(n){case e.hr_char:e.hr_chars+=1,e.pending=t;continue;case" ":e.pending=t;continue;case"\\n":if(e.hr_chars<3)break;u(e,e.indent_len),e.renderer.add_token(e.renderer.data,22),e.renderer.end_token(e.renderer.data),E(e),e.hr_chars=0;continue}e.hr_chars=0}if(e.pending[0]!=="_"&&e.pending[1]===" "){A(e,23),g(e,2),o(e,t.slice(2));continue}break;case"`":if(e.pending.length<3){if(n==="`"){e.pending=t,e.fence_start=t.length;continue}e.fence_start=0;break}switch(n){case"`":e.pending.length===e.fence_start?(e.pending=t,e.fence_start=t.length):(i(e,2),E(e),e.fence_start=0,o(e,t));continue;case"\\n":{u(e,e.indent_len),i(e,10),e.pending.length>e.fence_start&&e.renderer.set_attr(e.renderer.data,L,e.pending.slice(e.fence_start)),E(e),e.token=101;continue}default:e.pending=t;continue}case"+":if(n!==" ")break;A(e,23),g(e,2);continue;case"0":case"1":case"2":case"3":case"4":case"5":case"6":case"7":case"8":case"9":if(e.pending[e.pending.length-1]==="."){if(n!==" ")break;A(e,24)&&e.pending!=="1."&&e.renderer.set_attr(e.renderer.data,f,e.pending.slice(0,-1)),g(e,e.pending.length+1);continue}else{let r=n.charCodeAt(0);if(r===46||N(r)){e.pending=t;continue}}break;case"|":l(e,e.blockquote_idx),i(e,27),i(e,28),e.pending="",o(e,n);continue}let s=t;if(e.token===21)e.token=e.tokens[e.len],e.renderer.add_token(e.renderer.data,21),e.renderer.end_token(e.renderer.data);else if(e.indent_len>=4){let r=0;for(;r<4;r+=1)if(e.indent[r]==="\\t"){r=r+1;break}s=e.indent.slice(r)+t,i(e,9)}else i(e,2);E(e),o(e,s);continue;case 27:if(e.table_state===1)switch(n){case"-":case" ":case"|":case":":e.pending=t;continue;case"\\n":e.table_state=2,e.pending="";continue;default:_(e),e.table_state=0;break}else switch(e.pending){case"|":i(e,28),e.pending="",o(e,n);continue;case"\\n":_(e),e.pending="",e.table_state=0,o(e,n);continue}break;case 28:switch(e.pending){case"":break;case"|":i(e,29),_(e),e.pending="",o(e,n);continue;case"\\n":_(e),e.table_state=Math.min(e.table_state+1,2),e.pending="",o(e,n);continue;default:i(e,29),o(e,n);continue}break;case 29:if(e.pending==="|"){a(e),_(e),e.pending="",o(e,n);continue}break;case 9:switch(t){case"\\n    ":case"\\n   \\t":case"\\n  \\t":case"\\n \\t":case"\\n\\t":e.text+="\\n",e.pending="";continue;case"\\n":case"\\n ":case"\\n  ":case"\\n   ":e.pending=t;continue;default:e.pending.length!==0?(a(e),_(e),e.pending=n):e.text+=n;continue}case 10:switch(n){case"`":e.pending=t;continue;case"\\n":if(t.length===e.fence_start+e.fence_end+1){a(e),_(e),e.pending="",e.fence_start=0,e.fence_end=0,e.token=101;continue}e.token=101;break;case" ":if(e.pending[0]==="\\n"){e.pending=t,e.fence_end+=1;continue}break}e.text+=e.pending,e.pending=n,e.fence_end=1;continue;case 11:switch(n){case"`":t.length===e.fence_start+ +(e.pending[0]===" ")?(a(e),_(e),e.pending="",e.fence_start=0):e.pending=t;continue;case"\\n":e.text+=e.pending,e.pending="",e.token=21,e.blockquote_idx=0,a(e);continue;case" ":e.text+=e.pending,e.pending=n;continue;default:e.text+=t,e.pending="";continue}case 103:switch(e.pending.length){case 0:if(n!=="[")break;e.pending=t;continue;case 1:if(n!==" "&&n!=="x")break;e.pending=t;continue;case 2:if(n!=="]")break;e.pending=t;continue;case 3:if(n!==" ")break;e.renderer.add_token(e.renderer.data,26),e.pending[1]==="x"&&e.renderer.set_attr(e.renderer.data,T,""),e.renderer.end_token(e.renderer.data),e.pending=" ";continue}e.token=e.tokens[e.len],e.pending="",o(e,t);continue;case 14:case 15:{let r="*",d=12;if(e.token===15&&(r="_",d=13),r===e.pending){if(a(e),r===n){_(e),e.pending="";continue}i(e,d),e.pending=n;continue}break}case 12:case 13:{let r="*",d=14;switch(e.token===13&&(r="_",d=15),e.pending){case r:r===n?e.tokens[e.len-1]===d?e.pending=t:(a(e),i(e,d),e.pending=""):(a(e),_(e),e.pending=n);continue;case r+r:let R=e.token;a(e),_(e),_(e),r!==n?(i(e,R),e.pending=n):e.pending="";continue}break}case 16:if(t==="~~"){a(e),_(e),e.pending="";continue}break;case 105:n==="\\n"?(a(e),i(e,30),e.pending=""):(e.token=e.tokens[e.len],e.pending[0]==="\\\\"?e.text+="[":e.text+="$$",e.pending="",o(e,n));continue;case 30:if(t==="\\\\]"||t==="$$"){a(e),_(e),e.pending="";continue}break;case 31:if(t==="\\\\)"||e.pending[0]==="$"){a(e),_(e),n===")"?e.pending="":e.pending=n;continue}break;case 102:t==="http://"||t==="https://"?(a(e),i(e,18),e.pending=t,e.text=t):"http:/"[e.pending.length]===n||"https:/"[e.pending.length]===n?e.pending=t:(e.token=e.tokens[e.len],o(e,n));continue;case 17:case 19:if(e.pending==="]"){a(e),n==="("?e.pending=t:(_(e),e.pending=n);continue}if(e.pending[0]==="]"&&e.pending[1]==="("){if(n===")"){let r=e.token===17?I:k,d=e.pending.slice(2);e.renderer.set_attr(e.renderer.data,r,d),_(e),e.pending=""}else e.pending+=n;continue}break;case 18:n===" "||n==="\\n"||n==="\\\\"?(e.renderer.set_attr(e.renderer.data,I,e.pending),a(e),_(e),e.pending=n):(e.text+=n,e.pending=t);continue;case 104:if(t.startsWith("<br")){if(t.length===3||n===" "||n==="/"&&(t.length===4||e.pending[e.pending.length-1]===" ")){e.pending=t;continue}if(n===">"){a(e),e.token=e.tokens[e.len],e.renderer.add_token(e.renderer.data,21),e.renderer.end_token(e.renderer.data),e.pending="";continue}}e.token=e.tokens[e.len],e.text+="<",e.pending=e.pending.slice(1),o(e,n);continue}switch(e.pending[0]){case"\\\\":if(e.token===19||e.token===30||e.token===31)break;switch(n){case"(":a(e),i(e,31),e.pending="";continue;case"[":e.token=105,e.pending=t;continue;case"\\n":e.pending=n;continue;default:let s=n.charCodeAt(0);e.pending="",e.text+=N(s)||s>=65&&s<=90||s>=97&&s<=122?t:n;continue}case"\\n":switch(e.token){case 19:case 30:case 31:break;case 3:case 4:case 5:case 6:case 7:case 8:a(e),l(e,e.blockquote_idx),e.blockquote_idx=0,e.pending=n;continue;default:a(e),e.pending=n,e.token=21,e.blockquote_idx=0;continue}break;case"<":if(e.token!==19&&e.token!==30&&e.token!==31){a(e),e.pending=t,e.token=104;continue}break;case"`":if(e.token===19)break;n==="`"?(e.fence_start+=1,e.pending=t):(e.fence_start+=1,a(e),i(e,11),e.text=n===" "||n==="\\n"?"":n,e.pending="");continue;case"_":case"*":{if(e.token===19||e.token===30||e.token===31||e.token===14)break;let s=12,r=14,d=e.pending[0];if(d==="_"&&(s=13,r=15),e.pending.length===1){if(d===n){e.pending=t;continue}if(n!==" "&&n!=="\\n"){a(e),i(e,s),e.pending=n;continue}}else{if(d===n){a(e),i(e,r),i(e,s),e.pending="";continue}if(n!==" "&&n!=="\\n"){a(e),i(e,r),e.pending=n;continue}}break}case"~":if(e.token!==19&&e.token!==16){if(e.pending==="~"){if(n==="~"){e.pending=t;continue}}else if(n!==" "&&n!=="\\n"){a(e),i(e,16),e.pending=n;continue}}break;case"$":if(e.token!==19&&e.token!==16&&e.pending==="$")if(n==="$"){e.token=105,e.pending=t;continue}else{if(se(n.charCodeAt(0)))break;a(e),i(e,31),e.pending=n;continue}break;case"[":if(e.token!==19&&e.token!==17&&e.token!==30&&e.token!==31&&n!=="]"){a(e),i(e,17),e.pending=n;continue}break;case"!":if(e.token!==19&&n==="["){a(e),i(e,19),e.pending="";continue}break;case" ":if(e.pending.length===1&&n===" ")continue;break}if(e.token!==19&&e.token!==17&&e.token!==30&&e.token!==31&&n==="h"&&(e.pending===" "||e.pending==="")){e.text+=e.pending,e.pending=n,e.token=102;continue}e.text+=e.pending,e.pending=n}a(e)}function _e(e){return{add_token:oe,end_token:de,add_text:Ee,set_attr:le,data:{nodes:[e,,,,,],index:0}}}function oe(e,c){let n=e.nodes[e.index],t;switch(c){case 1:return;case 20:t=document.createElement("blockquote");break;case 2:t=document.createElement("p");break;case 21:t=document.createElement("br");break;case 22:t=document.createElement("hr");break;case 3:t=document.createElement("h1");break;case 4:t=document.createElement("h2");break;case 5:t=document.createElement("h3");break;case 6:t=document.createElement("h4");break;case 7:t=document.createElement("h5");break;case 8:t=document.createElement("h6");break;case 12:case 13:t=document.createElement("em");break;case 14:case 15:t=document.createElement("strong");break;case 16:t=document.createElement("s");break;case 11:t=document.createElement("code");break;case 18:case 17:t=document.createElement("a");break;case 19:t=document.createElement("img");break;case 23:t=document.createElement("ul");break;case 24:t=document.createElement("ol");break;case 25:t=document.createElement("li");break;case 26:let s=t=document.createElement("input");s.type="checkbox",s.disabled=!0;break;case 9:case 10:n=n.appendChild(document.createElement("pre")),t=document.createElement("code");break;case 27:t=document.createElement("table");break;case 28:switch(n.children.length){case 0:n=n.appendChild(document.createElement("thead"));break;case 1:n=n.appendChild(document.createElement("tbody"));break;default:n=n.children[1]}t=document.createElement("tr");break;case 29:t=document.createElement(n.parentElement?.tagName==="THEAD"?"th":"td");break;case 30:t=document.createElement("equation-block");break;case 31:t=document.createElement("equation-inline");break}e.nodes[++e.index]=n.appendChild(t)}function de(e){e.index-=1}function Ee(e,c){e.nodes[e.index].appendChild(document.createTextNode(c))}function le(e,c,n){e.nodes[e.index].setAttribute(ee(c),n)}window.smd={default_renderer:_e,parser:ae,parser_write:o,parser_end:ce};
+    """
 
     // MARK: - Persistence
 
@@ -71,6 +86,19 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
+    func signalStreamEnd() {
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("if(typeof finalize==='function')finalize()", completionHandler: nil)
+        }
+    }
+
+    func showUsageWarning(remaining: Int) {
+        DispatchQueue.main.async { [weak self] in
+            let js = "if(document.querySelector('.usage-warn')){}else{var w=document.createElement('div');w.className='usage-warn';w.style.cssText='position:fixed;bottom:28px;left:0;right:0;text-align:center;padding:4px;font-size:11px;color:var(--loading-text);';w.textContent='\(remaining) queries remaining today';document.body.appendChild(w);}"
+            self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
     // FIX #3: Escape newlines and carriage returns to prevent JS breakage
     private func appendChunkDirect(_ text: String) {
         let escaped = text
@@ -79,7 +107,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             .replacingOccurrences(of: "$", with: "\\$")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
-        webView?.evaluateJavaScript("appendContent(`\(escaped)`)", completionHandler: nil)
+        webView?.evaluateJavaScript("appendChunk(`\(escaped)`)", completionHandler: nil)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -100,6 +128,18 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         chunkQueue.removeAll()
     }
 
+    // Intercept link clicks and open in default browser
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.navigationType == .linkActivated,
+           let url = navigationAction.request.url {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
     func showError(_ message: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -109,14 +149,33 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
+    func showPromptInput() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isPromptMode = true
+            self.ensurePromptWindow()
+            self.webView?.loadHTMLString(self.promptInputHTML(), baseURL: nil)
+            self.presentPrompt()
+        }
+    }
+
     // FIX #6: Properly tear down webview to prevent retain cycle
     func dismiss() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if let f = self.overlayWindow?.frame { self.savedFrame = f }
+            // Don't overwrite saved position with the compact prompt frame
+            if !self.isPromptMode {
+                if let f = self.overlayWindow?.frame { self.savedFrame = f }
+            }
+            self.isPromptMode = false
             self.overlayWindow?.orderOut(nil)
             self.stopResize()
+            self.stopDrag()
+
             HotkeyService.shared.unregisterEsc()
+
+            // Remove theme observer
+            DistributedNotificationCenter.default().removeObserver(self)
 
             // Break the retain cycle: WKUserContentController -> self
             self.webView?.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -142,8 +201,62 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case "resizeEnd":
             stopResize()
             if let f = overlayWindow?.frame { savedFrame = f }
+        case "dragStart": startDrag()
+        case "dragEnd":
+            stopDrag()
+            if let f = overlayWindow?.frame { savedFrame = f }
+        case "promptSubmit":
+            if let prompt = dict["prompt"] as? String, !prompt.isEmpty {
+                onPromptSubmit?(prompt)
+            }
         default: break
         }
+    }
+
+    // MARK: - Drag via global NSEvent monitor
+
+    private func startDrag() {
+        guard let window = overlayWindow else { return }
+        dragStartOrigin = window.frame.origin
+        dragStartMouse = NSEvent.mouseLocation
+
+        let handler: (NSEvent) -> Void = { [weak self] event in
+            guard let self = self, let window = self.overlayWindow else { return }
+
+            if event.type == .leftMouseUp {
+                self.stopDrag()
+                self.savedFrame = window.frame
+                return
+            }
+
+            let cur = NSEvent.mouseLocation
+            let dx = cur.x - self.dragStartMouse.x
+            let dy = cur.y - self.dragStartMouse.y
+
+            let newOrigin = NSPoint(
+                x: self.dragStartOrigin.x + dx,
+                y: self.dragStartOrigin.y + dy
+            )
+            window.setFrameOrigin(newOrigin)
+        }
+
+        // Local monitor catches events on our own window
+        dragLocalMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDragged, .leftMouseUp]
+        ) { event in
+            handler(event)
+            return event
+        }
+        // Global monitor catches events if mouse leaves our window
+        dragGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            handler: handler
+        )
+    }
+
+    private func stopDrag() {
+        if let m = dragLocalMonitor { NSEvent.removeMonitor(m); dragLocalMonitor = nil }
+        if let m = dragGlobalMonitor { NSEvent.removeMonitor(m); dragGlobalMonitor = nil }
     }
 
     // MARK: - Resize via global NSEvent monitor
@@ -190,12 +303,42 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         if overlayWindow != nil { return }
 
         let frame: NSRect
-        if let saved = savedFrame, screenContains(saved) {
-            frame = saved
+        if let saved = savedFrame, let clamped = clampToScreen(saved) {
+            frame = clamped
         } else {
             frame = defaultFrame()
         }
         createWindow(frame: frame)
+    }
+
+    private func ensurePromptWindow() {
+        if overlayWindow != nil { return }
+        // Use saved position (top-left corner), falling back to default upper-right
+        let base: NSRect
+        if let saved = savedFrame, let clamped = clampToScreen(saved) {
+            base = clamped
+        } else {
+            base = defaultFrame()
+        }
+        // Same x and width, but compact height anchored to the top of the saved frame
+        let frame = NSRect(
+            x: base.origin.x,
+            y: base.origin.y + base.height - promptInputHeight,
+            width: base.width,
+            height: promptInputHeight
+        )
+        createWindow(frame: frame)
+        overlayWindow?.minSize = NSSize(width: minWidth, height: promptInputHeight)
+        overlayWindow?.maxSize = NSSize(width: 9999, height: promptInputHeight)
+    }
+
+    private func presentPrompt() {
+        guard let window = overlayWindow else { return }
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        HotkeyService.shared.registerEsc()
     }
 
     // FIX #1: Activate the app so the overlay is reliably visible
@@ -209,8 +352,19 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         HotkeyService.shared.registerEsc()
     }
 
-    private func screenContains(_ rect: NSRect) -> Bool {
-        NSScreen.screens.contains { NSContainsRect($0.frame, rect) }
+    private func clampToScreen(_ rect: NSRect) -> NSRect? {
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        guard let screen = NSScreen.screens.min(by: { a, b in
+            let dA = hypot(a.visibleFrame.midX - center.x, a.visibleFrame.midY - center.y)
+            let dB = hypot(b.visibleFrame.midX - center.x, b.visibleFrame.midY - center.y)
+            return dA < dB
+        }) else { return nil }
+
+        let sf = screen.visibleFrame
+        var clamped = rect
+        clamped.origin.x = min(max(clamped.origin.x, sf.minX), sf.maxX - clamped.width)
+        clamped.origin.y = min(max(clamped.origin.y, sf.minY), sf.maxY - clamped.height)
+        return clamped
     }
 
     private func defaultFrame() -> NSRect {
@@ -221,7 +375,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             return NSRect(x: 100, y: 100, width: defaultWidth, height: defaultHeight)
         }
         let sf = screen.visibleFrame
-        let pad: CGFloat = 20
+        let pad: CGFloat = 10
         return NSRect(
             x: sf.maxX - defaultWidth - pad,
             y: sf.maxY - defaultHeight - pad,
@@ -267,16 +421,36 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         container.layer?.cornerRadius = 14
         container.layer?.masksToBounds = true
         // FIX #1: Opaque backing so window is visible immediately, even before HTML renders
-        container.layer?.backgroundColor = NSColor(red: 0.07, green: 0.07, blue: 0.078, alpha: 0.92).cgColor
+        container.layer?.backgroundColor = Theme.nsOverlayBg(NSApp.effectiveAppearance).cgColor
         container.addSubview(wv)
 
         panel.contentView = container
         self.webView = wv
         self.overlayWindow = panel
+
+        // Observe system theme changes to update overlay appearance in real-time
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(systemThemeChanged),
+            name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil
+        )
+
         print("[Overlay] Window created at \(frame)")
     }
 
+    @objc private func systemThemeChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let container = self.overlayWindow?.contentView else { return }
+            container.layer?.backgroundColor = Theme.nsOverlayBg(NSApp.effectiveAppearance).cgColor
+            let isDark = Theme.isDark(NSApp.effectiveAppearance)
+            self.webView?.evaluateJavaScript("if(typeof setTheme==='function')setTheme(\(isDark))", completionHandler: nil)
+        }
+    }
+
     // MARK: - HTML
+
+    private var isDarkMode: Bool {
+        Theme.isDark(NSApp.effectiveAppearance)
+    }
 
     private func sharedHead(extraStyle: String = "") -> String {
         """
@@ -284,11 +458,47 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width">
         <style>
+        :root {
+            --bg: rgba(18,18,20,0.50);
+            --text: #f0f0f2;
+            --text-dim: rgba(255,255,255,0.28);
+            --subtle-bg: rgba(255,255,255,0.08);
+            --subtle-border: rgba(255,255,255,0.15);
+            --code-bg: rgba(0,0,0,0.3);
+            --code-inline-bg: rgba(255,255,255,0.08);
+            --blockquote-border: rgba(255,255,255,0.2);
+            --blockquote-text: rgba(240,240,242,0.7);
+            --link-color: #6cb4ff;
+            --table-header-bg: rgba(255,255,255,0.06);
+            --spinner-border: rgba(255,255,255,0.1);
+            --spinner-accent: rgba(255,255,255,0.5);
+            --loading-text: rgba(255,255,255,0.4);
+            --error-color: #ff6b6b;
+            --logo-filter: invert(1);
+        }
+        :root.light {
+            --bg: rgba(255,255,255,0.50);
+            --text: #1a1a1a;
+            --text-dim: rgba(0,0,0,0.25);
+            --subtle-bg: rgba(0,0,0,0.05);
+            --subtle-border: rgba(0,0,0,0.10);
+            --code-bg: rgba(0,0,0,0.05);
+            --code-inline-bg: rgba(0,0,0,0.06);
+            --blockquote-border: rgba(0,0,0,0.15);
+            --blockquote-text: rgba(0,0,0,0.6);
+            --link-color: #0066cc;
+            --table-header-bg: rgba(0,0,0,0.04);
+            --spinner-border: rgba(0,0,0,0.1);
+            --spinner-accent: rgba(0,0,0,0.4);
+            --loading-text: rgba(0,0,0,0.4);
+            --error-color: #cc0000;
+            --logo-filter: invert(0);
+        }
         * { margin:0; padding:0; box-sizing:border-box; }
         html, body {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            background: rgba(18,18,20,0.60);
-            color: #f0f0f2;
+            background: var(--bg);
+            color: var(--text);
             font-size: 13px;
             line-height: 1.6;
             height: 100vh;
@@ -299,13 +509,13 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             position: fixed; top: 0; left: 0; right: 0; height: 36px;
             display: flex; align-items: center; padding: 0 10px;
             gap: 8px;
-            -webkit-app-region: drag;
-            cursor: default;
+            cursor: grab;
+            user-select: none;
         }
-        .drag-bar * { -webkit-app-region: no-drag; }
+        .drag-bar:active { cursor: grabbing; }
         .logo {
             width: 15px; height: 15px;
-            filter: invert(1);
+            filter: var(--logo-filter);
             opacity: 0.75;
             flex-shrink: 0;
         }
@@ -328,11 +538,20 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             -webkit-app-region: no-drag;
         }
         .esc-hint {
-            font-size: 10px; color: rgba(255,255,255,0.28);
+            font-size: 10px; color: var(--text-dim);
             letter-spacing: 0.03em;
         }
         \(extraStyle)
         </style>
+        <script>
+        function setTheme(isDark) {
+            document.documentElement.className = isDark ? '' : 'light';
+            var dark = document.getElementById('hljs-dark');
+            var light = document.getElementById('hljs-light');
+            if (dark) dark.disabled = !isDark;
+            if (light) light.disabled = isDark;
+        }
+        </script>
         </head>
         """
     }
@@ -347,6 +566,16 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             window.webkit.messageHandlers.overlay.postMessage({action:'resizeStart'});
             function onUp() {
                 window.webkit.messageHandlers.overlay.postMessage({action:'resizeEnd'});
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mouseup', onUp);
+        });
+        document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
+            if (e.target.closest('.logo')) return;
+            e.preventDefault();
+            window.webkit.messageHandlers.overlay.postMessage({action:'dragStart', x: e.screenX, y: e.screenY});
+            function onUp() {
+                window.webkit.messageHandlers.overlay.postMessage({action:'dragEnd'});
                 document.removeEventListener('mouseup', onUp);
             }
             document.addEventListener('mouseup', onUp);
@@ -373,50 +602,205 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         """
     }
 
-    // FIX #2: Corrected MathJax displayMath from '15' to '$$'
-    // FIX #3: Updated appendContent JS to handle escaped newlines
+    // MARK: - Response HTML with streaming markdown + finalization
     private func responseHTML(_ text: String) -> String {
-        let escaped = text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\n", with: "<br>")
-
         return """
         <!DOCTYPE html>
         <html>
         \(sharedHead(extraStyle: """
-        .content { white-space: pre-wrap; word-wrap: break-word; padding-top: 4px; }
+        /* Typographic hierarchy for rendered markdown */
+        .content { padding-top: 4px; word-wrap: break-word; }
+        .content h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; }
+        .content h2 { font-size: 1.3em; font-weight: 600; margin: 0.7em 0 0.3em; }
+        .content h3 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; }
+        .content h4 { font-size: 1.05em; font-weight: 600; margin: 0.5em 0 0.2em; }
+        .content h5, .content h6 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; }
+        .content p { margin: 0.4em 0; }
+        .content ul, .content ol { padding-left: 1.4em; margin: 0.4em 0; }
+        .content li { margin: 0.15em 0; }
+        .content li > ul, .content li > ol { margin: 0.1em 0; }
+
+        /* Code blocks */
+        .content pre {
+            background: var(--code-bg);
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin: 0.5em 0;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+        .content pre code {
+            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+            background: none;
+            padding: 0;
+            font-size: inherit;
+            border-radius: 0;
+        }
+
+        /* Inline code */
+        .content code {
+            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+            background: var(--code-inline-bg);
+            padding: 0.15em 0.35em;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        /* Blockquotes */
+        .content blockquote {
+            border-left: 3px solid var(--blockquote-border);
+            padding-left: 12px;
+            margin: 0.5em 0;
+            color: var(--blockquote-text);
+        }
+
+        /* Links */
+        .content a { color: var(--link-color); text-decoration: none; }
+        .content a:hover { text-decoration: underline; }
+
+        /* Tables */
+        .content table { border-collapse: collapse; margin: 0.5em 0; width: 100%; font-size: 12px; }
+        .content th, .content td { border: 1px solid var(--subtle-border); padding: 4px 8px; text-align: left; }
+        .content th { background: var(--table-header-bg); font-weight: 600; }
+
+        /* Horizontal rule */
+        .content hr { border: none; border-top: 1px solid var(--subtle-border); margin: 0.8em 0; }
+
+        /* Bold and italic */
+        .content strong { font-weight: 600; }
+        .content em { font-style: italic; }
+        .content s { text-decoration: line-through; opacity: 0.6; }
+
+        /* Checkbox */
+        .content input[type="checkbox"] { margin-right: 6px; }
+
+        /* Images */
+        .content img { max-width: 100%; border-radius: 4px; margin: 0.4em 0; }
+
+        /* MathJax */
         .MathJax { font-size: 1.05em !important; }
         mjx-container { margin: 0.4em 0; }
+        equation-block { display: block; margin: 0.5em 0; text-align: center; }
+        equation-inline { display: inline; }
         """))
+
+        <!-- Inlined streaming-markdown (no CDN dependency) -->
+        <script>\(smdJS)</script>
+
+        <!-- CDN libraries for finalization -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" id="hljs-dark">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" id="hljs-light" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" onload="checkLibs()"></script>
+
+        <!-- MathJax config (must be before MathJax script) -->
         <script>
         MathJax = {
             tex: { inlineMath: [['$','$'],['\\\\(','\\\\)']], displayMath: [['$$','$$'],['\\\\[','\\\\]']], processEscapes: true },
-            options: { skipHtmlTags: ['script','noscript','style','textarea','pre'] }
+            options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
         };
         </script>
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
         <script>
-        function appendContent(text) {
-            var el = document.querySelector('.content');
-            if (!el) return;
+        // CDN load coordination
+        let libsReady = false;
+        let pendingFinalize = false;
 
-            // Convert escaped newlines back to <br> tags
-            var s = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                        .replace(/\\r\\n|\\r|\\n/g,'<br>');
-            el.innerHTML += s;
-
-            if (window.MathJax && MathJax.typesetPromise) {
-                MathJax.typesetPromise([el]).catch(function(){});
+        function checkLibs() {
+            if (window.marked && window.markedHighlight && window.hljs && window.DOMPurify) {
+                libsReady = true;
+                if (pendingFinalize) { pendingFinalize = false; doFinalize(); }
             }
         }
+
+        // Streaming state
+        let rawMarkdown = '';
+        let smdParser = null;
+
+        function appendChunk(text) {
+            if (!smdParser) {
+                var el = document.querySelector('.content');
+                el.innerHTML = '';
+                var renderer = smd.default_renderer(el);
+                smdParser = smd.parser(renderer);
+            }
+            rawMarkdown += text;
+            smd.parser_write(smdParser, text);
+
+        }
+
+        function finalize() {
+            if (smdParser) { smd.parser_end(smdParser); }
+            if (libsReady) {
+                doFinalize();
+            } else {
+                pendingFinalize = true;
+                // Timeout: if CDN libs don't load in 5s, keep smd output
+                setTimeout(function() {
+                    if (pendingFinalize) {
+                        pendingFinalize = false;
+                        runMathJax();
+                    }
+                }, 5000);
+            }
+        }
+
+        function doFinalize() {
+            if (!window.marked || !window.hljs) {
+                runMathJax();
+                return;
+            }
+
+            var markedInstance = new marked.Marked(
+                markedHighlight.markedHighlight({
+                    emptyLangClass: 'hljs',
+                    langPrefix: 'hljs language-',
+                    highlight: function(code, lang) {
+                        if (lang && hljs.getLanguage(lang)) {
+                            return hljs.highlight(code, { language: lang }).value;
+                        }
+                        return hljs.highlightAuto(code).value;
+                    }
+                })
+            );
+
+            // Links open in default browser via target="_blank"
+            var renderer = new marked.Renderer();
+            renderer.link = function(linkData) {
+                var href = linkData.href || '';
+                var title = linkData.title ? ' title="' + linkData.title + '"' : '';
+                var text = linkData.text || '';
+                return '<a href="' + href + '"' + title + ' target="_blank" rel="noopener noreferrer">' + text + '</a>';
+            };
+            markedInstance.use({ renderer: renderer });
+
+            var rawHTML = markedInstance.parse(rawMarkdown);
+            var safeHTML = DOMPurify.sanitize(rawHTML, { ADD_ATTR: ['target'] });
+            document.querySelector('.content').innerHTML = safeHTML;
+
+            runMathJax();
+        }
+
+        function runMathJax() {
+            if (window.MathJax && MathJax.typesetPromise) {
+                MathJax.typesetPromise([document.querySelector('.content')]).catch(function(){});
+            }
+        }
+
+
+
         </script>
+
         <body>
         \(headerHTML())
-        <div class="content-area"><div class="content">\(escaped)</div></div>
+        <div class="content-area"><div class="content"></div></div>
         \(bottomBarHTML())
         \(gripJS())
+        <script>setTheme(\(isDarkMode))</script>
         </body></html>
         """
     }
@@ -427,11 +811,11 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         \(sharedHead(extraStyle: """
         .center { display:flex; align-items:center; justify-content:center;
                   height:100%; flex-direction:column; gap:12px; }
-        .spinner { width:28px; height:28px; border:2.5px solid rgba(255,255,255,0.1);
-                   border-top-color:rgba(255,255,255,0.5); border-radius:50%;
+        .spinner { width:28px; height:28px; border:2.5px solid var(--spinner-border);
+                   border-top-color:var(--spinner-accent); border-radius:50%;
                    animation:spin 0.8s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
-        p { color:rgba(255,255,255,0.4); font-size:12px; }
+        p { color:var(--loading-text); font-size:12px; }
         """))
         <body>
         \(headerHTML())
@@ -440,6 +824,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         </div></div>
         \(bottomBarHTML())
         \(gripJS())
+        <script>setTheme(\(isDarkMode))</script>
         </body></html>
         """
     }
@@ -450,12 +835,77 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             .replacingOccurrences(of: ">", with: "&gt;")
         return """
         <!DOCTYPE html><html>
-        \(sharedHead(extraStyle: ".err { color:#ff6b6b; padding-top:4px; }"))
+        \(sharedHead(extraStyle: ".err { color:var(--error-color); padding-top:4px; }"))
         <body>
         \(headerHTML())
         <div class="content-area"><div class="err">\(escaped)</div></div>
         \(bottomBarHTML())
         \(gripJS())
+        <script>setTheme(\(isDarkMode))</script>
+        </body></html>
+        """
+    }
+
+    private func promptInputHTML() -> String {
+        """
+        <!DOCTYPE html><html>
+        \(sharedHead(extraStyle: """
+        .prompt-area {
+            position: absolute; top: 36px; left: 0; right: 0; bottom: 0;
+            display: flex; align-items: center;
+            padding: 0 12px 10px 12px;
+        }
+        .prompt-field {
+            width: 100%;
+            background: var(--subtle-bg);
+            border: 1px solid var(--subtle-border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 13px;
+            padding: 8px 12px;
+            outline: none;
+            resize: none;
+        }
+        .prompt-field::placeholder { color: var(--loading-text); }
+        .prompt-field:focus { border-color: var(--link-color); }
+        """))
+        <body>
+        <div class="drag-bar">
+            <img class="logo" src="data:image/png;base64,\(iconB64)">
+            <span style="font-size:11px;color:var(--text-dim);margin-left:2px;">Quick Prompt</span>
+            <span class="drag-spacer"></span>
+        </div>
+        <div class="prompt-area">
+            <input class="prompt-field" id="promptInput"
+                   type="text" placeholder="Ask anything about this screenshot…"
+                   autocomplete="off" autofocus>
+        </div>
+        <script>
+        document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
+            if (e.target.closest('.logo')) return;
+            e.preventDefault();
+            window.webkit.messageHandlers.overlay.postMessage({action:'dragStart', x: e.screenX, y: e.screenY});
+            function onUp() {
+                window.webkit.messageHandlers.overlay.postMessage({action:'dragEnd'});
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mouseup', onUp);
+        });
+        var input = document.getElementById('promptInput');
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                var text = input.value.trim();
+                if (text) {
+                    window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt: text});
+                }
+            }
+        });
+        // Auto-focus after page load
+        setTimeout(function() { input.focus(); }, 50);
+        setTheme(\(isDarkMode));
+        </script>
         </body></html>
         """
     }

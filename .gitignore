@@ -39,6 +39,8 @@ Dev Uploads /
 
 # Files with secrets
 RAILWAY_SETUP.md
+.env
+*.env
 
 # Misc
 *.swp

@@ -32,7 +32,7 @@ struct UpgradePromptView: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundColor(Theme.text1(colorScheme))
             
-            Text("Unlock unlimited for $5.99/month")
+            Text("Unlock unlimited for \(AppStateManager.shared.cachedPrice)")
                 .font(.system(size: 14))
                 .foregroundColor(Theme.text2(colorScheme))
             
@@ -88,6 +88,7 @@ struct AccountView: View {
     @State private var errorMessage = ""
     @State private var successMessage = ""
     @State private var isLoading = false
+    @State private var showPasswordReset = false
 
     var onSuccess: (String) -> Void  // Called with JWT token
     var openPromoField: Bool = false
@@ -167,6 +168,18 @@ struct AccountView: View {
                         .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
+
+                if isSignIn {
+                    Button(action: { showPasswordReset = true }) {
+                        Text("Forgot password?")
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.text3(colorScheme))
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showPasswordReset) {
+                        PasswordResetView()
+                    }
+                }
 
                 if showPromoField {
                     TextField("Enter code", text: $promoCode)
@@ -407,18 +420,244 @@ class AccountViewController {
 
 class CheckoutViewController {
     private var window: NSWindow?
-    
+
     func show(checkoutURL: String, onSuccess: @escaping (String) -> Void) {
         let view = CheckoutStatusView(checkoutURL: checkoutURL, onSuccess: { jwt in
             self.window?.close()
             self.window = nil
             onSuccess(jwt)
         })
-        
+
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Checkout")
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = panel
+    }
+}
+
+// MARK: - Password Reset View
+
+struct PasswordResetView: View {
+    @Environment(\.colorScheme) var colorScheme
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var email = ""
+    @State private var code = ""
+    @State private var newPassword = ""
+    @State private var step: ResetStep = .enterEmail
+    @State private var errorMessage = ""
+    @State private var isLoading = false
+
+    enum ResetStep {
+        case enterEmail
+        case enterCode
+        case success
+    }
+
+    var body: some View {
+        VStack(spacing: 24) {
+            switch step {
+            case .enterEmail:
+                emailStep
+            case .enterCode:
+                codeStep
+            case .success:
+                successStep
+            }
+        }
+        .padding(32)
+        .frame(width: 420, height: 420)
+        .background(Theme.bg(colorScheme))
+    }
+
+    private var emailStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 40))
+                .foregroundColor(Theme.text2(colorScheme))
+
+            Text("Reset Password")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(Theme.text1(colorScheme))
+
+            Text("Enter your email and we'll send you a reset code")
+                .font(.system(size: 14))
+                .foregroundColor(Theme.text2(colorScheme))
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 12) {
+                TextField("you@example.com", text: $email)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .padding(12)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+                    .autocorrectionDisabled()
+
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundColor(.red)
+                }
+
+                Button(action: requestReset) {
+                    if isLoading {
+                        ProgressView().progressViewStyle(.circular).controlSize(.small)
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    } else {
+                        Text("Send Reset Code")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Theme.text1(colorScheme))
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    }
+                }
+                .buttonStyle(.plain)
+                .background(Color.blue)
+                .cornerRadius(8)
+                .disabled(email.isEmpty || isLoading)
+
+                Button(action: { dismiss() }) {
+                    Text("Cancel")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(width: 300)
+        }
+    }
+
+    private var codeStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "envelope.badge.fill")
+                .font(.system(size: 40))
+                .foregroundColor(Theme.text2(colorScheme))
+
+            Text("Check Your Email")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(Theme.text1(colorScheme))
+
+            Text("Enter the 6-digit code sent to \(email)")
+                .font(.system(size: 14))
+                .foregroundColor(Theme.text2(colorScheme))
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 12) {
+                TextField("000000", text: $code)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 24, weight: .medium, design: .monospaced))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .multilineTextAlignment(.center)
+                    .padding(12)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+                    .frame(width: 180)
+
+                SecureField("New password", text: $newPassword)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .padding(12)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+
+                if !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundColor(.red)
+                }
+
+                Button(action: submitReset) {
+                    if isLoading {
+                        ProgressView().progressViewStyle(.circular).controlSize(.small)
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    } else {
+                        Text("Reset Password")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Theme.text1(colorScheme))
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                    }
+                }
+                .buttonStyle(.plain)
+                .background(Color.blue)
+                .cornerRadius(8)
+                .disabled(code.count < 6 || newPassword.count < 8 || isLoading)
+
+                Button(action: { step = .enterEmail; errorMessage = "" }) {
+                    Text("Back")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(width: 300)
+        }
+    }
+
+    private var successStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundColor(.green)
+
+            Text("Password Reset!")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(Theme.text1(colorScheme))
+
+            Text("You can now sign in with your new password.")
+                .font(.system(size: 14))
+                .foregroundColor(Theme.text2(colorScheme))
+
+            Button(action: { dismiss() }) {
+                Text("Done")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .frame(maxWidth: .infinity).frame(height: 44)
+            }
+            .buttonStyle(.plain)
+            .background(Color.blue)
+            .cornerRadius(8)
+            .frame(width: 300)
+        }
+    }
+
+    private func requestReset() {
+        isLoading = true
+        errorMessage = ""
+        Task {
+            do {
+                try await APIService.shared.requestPasswordReset(email: email)
+                await MainActor.run {
+                    isLoading = false
+                    step = .enterCode
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func submitReset() {
+        isLoading = true
+        errorMessage = ""
+        Task {
+            do {
+                try await APIService.shared.resetPassword(email: email, code: code, newPassword: newPassword)
+                await MainActor.run {
+                    isLoading = false
+                    step = .success
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 }

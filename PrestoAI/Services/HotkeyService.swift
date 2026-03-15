@@ -11,9 +11,11 @@ class HotkeyService {
     
     private var eventHandlerRef: EventHandlerRef?
     private var captureHotKeyRef: EventHotKeyRef?
+    private var quickPromptHotKeyRef: EventHotKeyRef?
     private var escHotKeyRef: EventHotKeyRef?
-    
+
     var onCapture: (() -> Void)?
+    var onQuickPrompt: (() -> Void)?
     var onEsc: (() -> Void)?
     
     private init() {
@@ -80,6 +82,20 @@ class HotkeyService {
         )
         print("[Hotkey] Cmd+Shift+X registered: \(status == noErr)")
     }
+
+    /// Register Cmd+Shift+Z globally (call once at app launch)
+    func registerQuickPrompt() {
+        let hotKeyID = EventHotKeyID(signature: hotKeySignature(), id: 3)
+        let status = RegisterEventHotKey(
+            UInt32(kVK_ANSI_Z),           // keycode for Z
+            UInt32(cmdKey | shiftKey),     // modifiers
+            hotKeyID,
+            GetEventDispatcherTarget(),
+            0,
+            &quickPromptHotKeyRef
+        )
+        print("[Hotkey] Cmd+Shift+Z registered: \(status == noErr)")
+    }
     
     /// Register ESC globally (call when overlay appears)
     func registerEsc() {
@@ -114,6 +130,9 @@ class HotkeyService {
         case 2:
             print("[Hotkey] ESC fired")
             onEsc?()
+        case 3:
+            print("[Hotkey] Cmd+Shift+Z fired")
+            onQuickPrompt?()
         default:
             break
         }
@@ -129,6 +148,7 @@ class HotkeyService {
     
     deinit {
         if let ref = captureHotKeyRef { UnregisterEventHotKey(ref) }
+        if let ref = quickPromptHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = escHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = eventHandlerRef { RemoveEventHandler(ref) }
     }

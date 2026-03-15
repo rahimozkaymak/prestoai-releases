@@ -19,6 +19,8 @@ class AppStateManager: ObservableObject {
     @Published private(set) var currentState: AppState = .freeActive
     @Published private(set) var queriesRemaining: Int = 5
     @Published private(set) var totalFreeQueries: Int = 5
+    @Published private(set) var isOffline: Bool = false
+    @Published var cachedPrice: String = "$5.99/month"
     
     // Keychain keys
     private let deviceIDKey = "presto.device_id"
@@ -157,9 +159,10 @@ class AppStateManager: ObservableObject {
             }
         } catch {
             // #19 — Backend unreachable: do NOT grant free queries offline
+            isOffline = true
             currentState = .anonymous
             queriesRemaining = 0
-            print("[AppState] Backend unreachable, state = .anonymous (no offline free queries)")
+            print("[AppState] Backend unreachable, state = .anonymous (offline)")
         }
     }
     
@@ -191,6 +194,12 @@ class AppStateManager: ObservableObject {
     
     @MainActor
     func signOut() {
+        // Invalidate refresh token on backend before clearing local state
+        if let refreshToken = KeychainHelper.load(key: "presto.refresh_token") {
+            Task {
+                await APIService.shared.logout(refreshToken: refreshToken)
+            }
+        }
         clearTokens()
         // Keep device ID — free queries are lifetime
         currentState = .freeExhausted
