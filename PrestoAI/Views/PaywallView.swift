@@ -23,25 +23,20 @@ struct PaywallView: View {
 
     @State private var linkCopied = false
     @State private var referralCode: String?
-
-    private let bg = Color(red: 0.039, green: 0.039, blue: 0.039)
-    private let surface = Color(red: 0.110, green: 0.110, blue: 0.110)
-    private let border = Color(red: 0.165, green: 0.165, blue: 0.165)
-    private let text1 = Color(red: 0.878, green: 0.878, blue: 0.878)
-    private let text2 = Color(red: 0.467, green: 0.467, blue: 0.467)
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
             // Title
             Text("Unlock Your Full Potential")
                 .font(.system(size: 26, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
                 .padding(.top, 16)
                 .padding(.bottom, 6)
 
             Text("Choose how to continue your experience")
                 .font(.system(size: 14))
-                .foregroundColor(text2)
+                .foregroundColor(Theme.text2(colorScheme))
                 .padding(.bottom, 20)
 
             if info.canUseReferral {
@@ -52,7 +47,7 @@ struct PaywallView: View {
         }
         .padding(.bottom, 24)
         .frame(width: info.canUseReferral ? 560 : 420, height: 420)
-        .background(bg)
+        .background(Theme.bg(colorScheme))
         .onAppear {
             referralCode = info.referralCode
         }
@@ -83,15 +78,15 @@ struct PaywallView: View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles")
                 .font(.system(size: 28))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(Theme.text1(colorScheme))
 
             Text("Unlimited Analyses")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
 
             Text(info.subscribePrice)
                 .font(.system(size: 24, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
 
             // Feature bullets
             VStack(alignment: .leading, spacing: 5) {
@@ -106,7 +101,7 @@ struct PaywallView: View {
             Button(action: onSubscribe) {
                 Text("Start Full Access")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(Theme.text1(colorScheme))
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
                     .background(Color.blue)
@@ -116,11 +111,11 @@ struct PaywallView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity)
-        .background(surface)
+        .background(Theme.surface(colorScheme))
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(border, lineWidth: 1)
+                .stroke(Theme.border(colorScheme), lineWidth: 1)
         )
     }
 
@@ -128,10 +123,10 @@ struct PaywallView: View {
         HStack(spacing: 6) {
             Image(systemName: "checkmark")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(text2)
+                .foregroundColor(Theme.text2(colorScheme))
             Text(text)
                 .font(.system(size: 12))
-                .foregroundColor(text2)
+                .foregroundColor(Theme.text2(colorScheme))
         }
     }
 
@@ -143,15 +138,15 @@ struct PaywallView: View {
         return VStack(spacing: 12) {
             Image(systemName: "person.2.fill")
                 .font(.system(size: 28))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(Theme.text1(colorScheme))
 
             Text("Get 1 Free Month")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
 
             Text("Refer 3 friends to join and explore")
                 .font(.system(size: 13))
-                .foregroundColor(text2)
+                .foregroundColor(Theme.text2(colorScheme))
                 .multilineTextAlignment(.center)
 
             // Progress icons
@@ -159,17 +154,17 @@ struct PaywallView: View {
                 ForEach(0..<info.needed, id: \.self) { i in
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 20))
-                        .foregroundColor(i < info.qualifiedCount ? .green : .white.opacity(0.15))
+                        .foregroundColor(i < info.qualifiedCount ? .green : Theme.subtleBorder(colorScheme))
                 }
             }
 
             VStack(spacing: 2) {
                 Text("\(remaining) invite\(remaining == 1 ? "" : "s") remaining")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(text2)
+                    .foregroundColor(Theme.text2(colorScheme))
                 Text("\(remaining) invite\(remaining == 1 ? "" : "s") remaining to claim reward")
                     .font(.system(size: 11))
-                    .foregroundColor(text2.opacity(0.7))
+                    .foregroundColor(Theme.text2(colorScheme).opacity(0.7))
             }
             .padding(.bottom, 4)
 
@@ -188,25 +183,25 @@ struct PaywallView: View {
                     Text(linkCopied ? "Link copied!" : "Copy Invitation Link")
                         .font(.system(size: 14, weight: .medium))
                 }
-                .foregroundColor(.white)
+                .foregroundColor(Theme.text1(colorScheme))
                 .frame(maxWidth: .infinity)
                 .frame(height: 36)
-                .background(Color.white.opacity(0.10))
+                .background(Theme.inputBg(colorScheme))
                 .cornerRadius(8)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(Theme.subtleBorder(colorScheme), lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
         }
         .padding(16)
         .frame(maxWidth: .infinity)
-        .background(surface)
+        .background(Theme.surface(colorScheme))
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(border, lineWidth: 1)
+                .stroke(Theme.border(colorScheme), lineWidth: 1)
         )
     }
 
