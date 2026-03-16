@@ -219,7 +219,7 @@ struct SettingsView: View {
             .padding(.top, 8)
 
             // Version
-            Text("v1.0.0")
+            Text("v1.5.0")
                 .font(.system(size: 11))
                 .foregroundColor(Theme.text4(colorScheme))
                 .frame(maxWidth: .infinity, alignment: .trailing)

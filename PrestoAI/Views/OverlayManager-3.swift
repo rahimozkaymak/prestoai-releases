@@ -20,6 +20,11 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private var chunkQueue: [String] = []
     private var isPromptMode = false
 
+    // Follow-up conversation state
+    private var conversationHistory: [(question: String, answer: String)] = []
+    private var currentScreenshot: String?
+    var onFollowUpSubmit: ((String) -> Void)?
+
     private let defaultWidth:  CGFloat = 420
     private let defaultHeight: CGFloat = 340
     private let minWidth:      CGFloat = 260
@@ -91,6 +96,54 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             self?.webView?.evaluateJavaScript("if(typeof finalize==='function')finalize()", completionHandler: nil)
         }
     }
+
+    // MARK: - Follow-Up Conversation
+
+    func storeConversationContext(screenshot: String, initialPrompt: String?) {
+        currentScreenshot = screenshot
+        conversationHistory.removeAll()
+    }
+
+    func addTurnToHistory(question: String, completion: @escaping () -> Void) {
+        // Read rawMarkdown from JS to capture the answer
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("rawMarkdown") { result, _ in
+                let answer = (result as? String) ?? ""
+                self?.conversationHistory.append((question: question, answer: answer))
+                completion()
+            }
+        }
+    }
+
+    func buildContextPrompt(newQuestion: String) -> String {
+        // Cap at last 5 turns
+        let recentHistory = conversationHistory.suffix(5)
+        if recentHistory.isEmpty {
+            return newQuestion
+        }
+        var parts = ["Previous conversation about this screenshot:\n"]
+        for turn in recentHistory {
+            parts.append("Q: \(turn.question)")
+            parts.append("A: \(turn.answer)\n")
+        }
+        parts.append("New follow-up question: \(newQuestion)")
+        parts.append("Please continue analyzing the same screenshot to answer this follow-up.")
+        return parts.joined(separator: "\n")
+    }
+
+    func prepareFollowUp(question: String) {
+        let escaped = question
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("startFollowUp(`\(escaped)`)", completionHandler: nil)
+        }
+    }
+
+    var storedScreenshot: String? { currentScreenshot }
 
     func showUsageWarning(remaining: Int) {
         DispatchQueue.main.async { [weak self] in
@@ -168,6 +221,9 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 if let f = self.overlayWindow?.frame { self.savedFrame = f }
             }
             self.isPromptMode = false
+            self.conversationHistory.removeAll()
+            self.currentScreenshot = nil
+            self.onFollowUpSubmit = nil
             self.overlayWindow?.orderOut(nil)
             self.stopResize()
             self.stopDrag()
@@ -208,6 +264,10 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case "promptSubmit":
             if let prompt = dict["prompt"] as? String, !prompt.isEmpty {
                 onPromptSubmit?(prompt)
+            }
+        case "followUpSubmit":
+            if let prompt = dict["prompt"] as? String, !prompt.isEmpty {
+                onFollowUpSubmit?(prompt)
             }
         default: break
         }
@@ -683,6 +743,38 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         mjx-container { margin: 0.4em 0; }
         equation-block { display: block; margin: 0.5em 0; text-align: center; }
         equation-inline { display: inline; }
+
+        /* Follow-up reply field */
+        .reply-wrapper { margin-top: 12px; }
+        .reply-separator {
+            border-top: 1px solid var(--subtle-border);
+            margin-bottom: 10px;
+        }
+        .reply-field {
+            width: 100%;
+            background: var(--subtle-bg);
+            border: 1px solid var(--subtle-border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 13px;
+            padding: 8px 12px;
+            outline: none;
+        }
+        .reply-field::placeholder { color: var(--loading-text); }
+        .reply-field:focus { border-color: var(--link-color); }
+        .reply-field:disabled { opacity: 0.5; }
+
+        /* Follow-up question separator */
+        .followup-question {
+            margin: 16px 0 8px 0;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: var(--loading-text);
+            border-top: 1px solid var(--subtle-border);
+            font-style: italic;
+        }
+        .followup-question::before { content: 'You: '; font-weight: 600; }
         """))
 
         <!-- Inlined streaming-markdown (no CDN dependency) -->
@@ -721,20 +813,25 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let rawMarkdown = '';
         let smdParser = null;
 
+        function getLastContent() {
+            var els = document.querySelectorAll('.content');
+            return els[els.length - 1];
+        }
+
         function appendChunk(text) {
             if (!smdParser) {
-                var el = document.querySelector('.content');
+                var el = getLastContent();
                 el.innerHTML = '';
                 var renderer = smd.default_renderer(el);
                 smdParser = smd.parser(renderer);
             }
             rawMarkdown += text;
             smd.parser_write(smdParser, text);
-
         }
 
         function finalize() {
             if (smdParser) { smd.parser_end(smdParser); }
+            if (!libsReady) { checkLibs(); }
             if (libsReady) {
                 doFinalize();
             } else {
@@ -778,20 +875,126 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             };
             markedInstance.use({ renderer: renderer });
 
-            var rawHTML = markedInstance.parse(rawMarkdown);
+            // Protect math expressions from marked.js parsing
+            var mathStore = [];
+            var processed = rawMarkdown;
+
+            function extractMath(text, open, close, store) {
+                var s = 0;
+                while (s < text.length) {
+                    var a = text.indexOf(open, s);
+                    if (a === -1) break;
+                    var b = text.indexOf(close, a + open.length);
+                    if (b === -1) break;
+                    var math = text.substring(a, b + close.length);
+                    var ph = '%%MATH_' + store.length + '%%';
+                    store.push(math);
+                    text = text.substring(0, a) + ph + text.substring(b + close.length);
+                    s = a + ph.length;
+                }
+                return text;
+            }
+
+            processed = extractMath(processed, '$$', '$$', mathStore);
+            var pos = 0;
+            while (pos < processed.length) {
+                var a = processed.indexOf('$', pos);
+                if (a === -1) break;
+                var nl = processed.indexOf('\\n', a + 1);
+                var limit = (nl === -1) ? processed.length : nl;
+                var b = processed.indexOf('$', a + 1);
+                if (b === -1 || b >= limit) { pos = a + 1; continue; }
+                var math = processed.substring(a, b + 1);
+                var ph = '%%MATH_' + mathStore.length + '%%';
+                mathStore.push(math);
+                processed = processed.substring(0, a) + ph + processed.substring(b + 1);
+                pos = a + ph.length;
+            }
+            processed = extractMath(processed, '\\\\[', '\\\\]', mathStore);
+            processed = extractMath(processed, '\\\\(', '\\\\)', mathStore);
+
+            var rawHTML = markedInstance.parse(processed);
             var safeHTML = DOMPurify.sanitize(rawHTML, { ADD_ATTR: ['target'] });
-            document.querySelector('.content').innerHTML = safeHTML;
+
+            for (var i = 0; i < mathStore.length; i++) {
+                safeHTML = safeHTML.split('%%MATH_' + i + '%%').join(mathStore[i]);
+            }
+
+            getLastContent().innerHTML = safeHTML;
 
             runMathJax();
         }
 
         function runMathJax() {
+            var el = getLastContent();
             if (window.MathJax && MathJax.typesetPromise) {
-                MathJax.typesetPromise([document.querySelector('.content')]).catch(function(){});
+                MathJax.typesetClear([el]);
+                MathJax.typesetPromise([el]).catch(function(){});
+            } else if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
+                MathJax.startup.promise.then(function() {
+                    MathJax.typesetClear([el]);
+                    MathJax.typesetPromise([el]).catch(function(){});
+                });
             }
         }
 
+        function showReplyField() {
+            if (document.getElementById('replyField')) return;
+            var area = document.querySelector('.content-area');
+            var wrapper = document.createElement('div');
+            wrapper.className = 'reply-wrapper';
+            wrapper.innerHTML = '<div class="reply-separator"></div>' +
+                '<input class="reply-field" id="replyField" type="text" ' +
+                'placeholder="Ask a follow-up…" autocomplete="off">';
+            area.appendChild(wrapper);
+            var input = document.getElementById('replyField');
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    var text = input.value.trim();
+                    if (text) {
+                        input.disabled = true;
+                        input.value = 'Thinking…';
+                        window.webkit.messageHandlers.overlay.postMessage({action:'followUpSubmit', prompt: text});
+                    }
+                }
+            });
+            // No auto-focus — let the user click when ready
+        }
 
+        function startFollowUp(question) {
+            // Remove reply field
+            var existing = document.querySelector('.reply-wrapper');
+            if (existing) existing.remove();
+            // Remove usage warning if present
+            var warn = document.querySelector('.usage-warn');
+            if (warn) warn.remove();
+            // Add separator with user question
+            var area = document.querySelector('.content-area');
+            var sep = document.createElement('div');
+            sep.className = 'followup-question';
+            sep.textContent = question;
+            area.appendChild(sep);
+            // Add new content div — give it min-height so there's enough scroll room
+            // to bring the question separator to the top of the visible area
+            var newContent = document.createElement('div');
+            newContent.className = 'content';
+            newContent.style.minHeight = area.clientHeight + 'px';
+            area.appendChild(newContent);
+            // Reset streaming state
+            rawMarkdown = '';
+            smdParser = null;
+            pendingFinalize = false;
+            // Scroll so the question is at the top of the visible area
+            area.scrollTop = sep.offsetTop - 4;
+        }
+
+        // Override finalize to also show reply field
+        var _origFinalize = finalize;
+        finalize = function() {
+            _origFinalize();
+            showReplyField();
+        };
 
         </script>
 

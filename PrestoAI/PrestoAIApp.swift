@@ -287,6 +287,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let screenshot = try await ScreenCaptureService.captureInteractive()
                 await MainActor.run { self.overlayManager?.showLoading() }
 
+                self.overlayManager?.storeConversationContext(screenshot: screenshot, initialPrompt: nil)
+
                 var isFirstChunk = true
                 APIService.shared.sendScreenshot(screenshot,
                     onChunk: { [weak self] chunk in
@@ -302,10 +304,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             self?.overlayManager?.signalStreamEnd()
                             stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                             self?.refreshMenuState()
-                            // Usage warning for paid users approaching daily limit
                             if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
                                 self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                             }
+                            // Wire follow-up for "Explain" captures (no initial prompt)
+                            self?.wireFollowUp(screenshot: screenshot, lastQuestion: "Explain this screenshot")
                         }
                     },
                     onError: { [weak self] error in
@@ -361,21 +364,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func sendWithPrompt(screenshot: String, prompt: String) {
+    private func sendWithPrompt(screenshot: String, prompt: String, isFollowUp: Bool = false) {
         let stateManager = AppStateManager.shared
-        overlayManager?.dismiss()
 
-        // Small delay to let dismiss complete before showing loading
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.overlayManager?.showLoading()
+        if !isFollowUp {
+            overlayManager?.dismiss()
+        }
+
+        let startStreaming: () -> Void = { [weak self] in
+            if !isFollowUp {
+                self?.overlayManager?.storeConversationContext(screenshot: screenshot, initialPrompt: prompt)
+                self?.overlayManager?.showLoading()
+            }
 
             var isFirstChunk = true
-            APIService.shared.sendScreenshot(screenshot, prompt: prompt,
+            let actualPrompt = isFollowUp
+                ? (self?.overlayManager?.buildContextPrompt(newQuestion: prompt) ?? prompt)
+                : prompt
+
+            APIService.shared.sendScreenshot(screenshot, prompt: actualPrompt,
                 onChunk: { [weak self] chunk in
                     guard let self = self else { return }
                     if isFirstChunk {
                         isFirstChunk = false
-                        self.overlayManager?.showResponse("")
+                        if !isFollowUp {
+                            self.overlayManager?.showResponse("")
+                        }
                     }
                     self.overlayManager?.appendChunk(chunk)
                 },
@@ -387,6 +401,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
                             self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                         }
+                        self?.wireFollowUp(screenshot: screenshot, lastQuestion: prompt)
                     }
                 },
                 onError: { [weak self] error in
@@ -399,6 +414,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             )
+        }
+
+        if isFollowUp {
+            startStreaming()
+        } else {
+            // Small delay to let dismiss complete before showing loading
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: startStreaming)
+        }
+    }
+
+    private func wireFollowUp(screenshot: String, lastQuestion: String) {
+        // Save the current turn's answer to history, then set up follow-up handler
+        overlayManager?.addTurnToHistory(question: lastQuestion) { [weak self] in
+            self?.overlayManager?.onFollowUpSubmit = { [weak self] followUpPrompt in
+                guard let self = self else { return }
+                let stateManager = AppStateManager.shared
+
+                if !stateManager.canAnalyze {
+                    self.showPaywall()
+                    return
+                }
+
+                // Prepare UI for new turn
+                self.overlayManager?.prepareFollowUp(question: followUpPrompt)
+
+                // Send with conversation context
+                self.sendWithPrompt(screenshot: screenshot, prompt: followUpPrompt, isFollowUp: true)
+            }
         }
     }
 
