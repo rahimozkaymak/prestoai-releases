@@ -58,7 +58,7 @@ class PrestoAIURLHandler: NSObject {
         guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
               let url = URL(string: urlString) else { return }
 
-        if url.host == "checkout-success" || url.path == "checkout-success" {
+        if url.host == "checkout-success" || url.path.contains("checkout-success") || urlString.contains("checkout-success") {
             print("[Presto.AI] Received checkout-success deep link, refreshing auth state...")
             Task {
                 await AppStateManager.shared.initializeState()

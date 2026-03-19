@@ -366,7 +366,7 @@ struct CheckoutStatusView: View {
                     // Continue polling on error
                 }
                 
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
             
             await MainActor.run {
