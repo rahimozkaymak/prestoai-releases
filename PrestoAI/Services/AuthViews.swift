@@ -321,6 +321,24 @@ struct CheckoutStatusView: View {
         .onDisappear {
             pollingTask?.cancel()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .checkoutCompleted)) { _ in
+            print("[Checkout] Deep link received, checking immediately...")
+            Task {
+                guard !isTimedOut else { return }
+                guard let jwt = AppStateManager.shared.jwt, !jwt.isEmpty else { return }
+                if let status = try? await APIService.shared.validateAuth(token: jwt),
+                   status.state == "paid" {
+                    await MainActor.run {
+                        statusMessage = "You're all set. Press Cmd+Shift+X to continue."
+                        pollingTask?.cancel()
+                        onSuccess(AppStateManager.shared.jwt ?? "")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            dismiss()
+                        }
+                    }
+                }
+            }
+        }
     }
     
     private func openCheckoutInBrowser() {
@@ -367,7 +385,7 @@ struct CheckoutStatusView: View {
                     print("[Checkout] Poll error: \(error)")
                 }
                 
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
             
             await MainActor.run {

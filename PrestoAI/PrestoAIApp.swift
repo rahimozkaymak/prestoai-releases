@@ -60,6 +60,7 @@ class PrestoAIURLHandler: NSObject {
 
         if url.host == "checkout-success" || url.path.contains("checkout-success") || urlString.contains("checkout-success") {
             print("[Presto.AI] Received checkout-success deep link, refreshing auth state...")
+            NotificationCenter.default.post(name: .checkoutCompleted, object: nil)
             Task {
                 await AppStateManager.shared.initializeState()
             }

@@ -28,6 +28,7 @@ enum WizardStartMode {
 // Notification posted by "Run Setup Again" button (avoids fragile AppDelegate cast)
 extension Notification.Name {
     static let rerunSetupWizard = Notification.Name("rerunSetupWizard")
+    static let checkoutCompleted = Notification.Name("checkoutCompleted")
 }
 
 // MARK: - Setup Wizard
