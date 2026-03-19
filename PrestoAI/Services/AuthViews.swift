@@ -281,8 +281,6 @@ struct CheckoutStatusView: View {
     @State private var statusMessage = "Waiting for payment..."
     @State private var isPolling = true
     @State private var pollingTask: Task<Void, Never>?
-    @State private var isTimedOut = false
-    
     var checkoutURL: String
     var onSuccess: (String) -> Void
     
@@ -321,24 +319,6 @@ struct CheckoutStatusView: View {
         .onDisappear {
             pollingTask?.cancel()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .checkoutCompleted)) { _ in
-            print("[Checkout] Deep link received, checking immediately...")
-            Task {
-                guard !isTimedOut else { return }
-                guard let jwt = AppStateManager.shared.jwt, !jwt.isEmpty else { return }
-                if let status = try? await APIService.shared.validateAuth(token: jwt),
-                   status.state == "paid" {
-                    await MainActor.run {
-                        statusMessage = "You're all set. Press Cmd+Shift+X to continue."
-                        pollingTask?.cancel()
-                        onSuccess(AppStateManager.shared.jwt ?? "")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            dismiss()
-                        }
-                    }
-                }
-            }
-        }
     }
     
     private func openCheckoutInBrowser() {
@@ -349,9 +329,8 @@ struct CheckoutStatusView: View {
     private func startPolling() {
         pollingTask = Task {
             let startTime = Date()
-            let maxDuration: TimeInterval = 300
-            
-            while !Task.isCancelled && Date().timeIntervalSince(startTime) < maxDuration {
+
+            while !Task.isCancelled {
                 do {
                     // #12 — Don't call validateAuth with empty JWT
                     guard let jwt = AppStateManager.shared.jwt, !jwt.isEmpty else {
@@ -365,8 +344,6 @@ struct CheckoutStatusView: View {
                     print("[Checkout] Poll result: state=\(status.state), email=\(status.email ?? "nil")")
 
                     await MainActor.run {
-                        // #27 — Ignore success if already timed out
-                        guard !isTimedOut else { return }
                         if status.state == "paid" {
                             statusMessage = "You're all set. Press Cmd+Shift+X to continue."
                             pollingTask?.cancel()
@@ -385,15 +362,9 @@ struct CheckoutStatusView: View {
                     print("[Checkout] Poll error: \(error)")
                 }
                 
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-            
-            await MainActor.run {
-                if !Task.isCancelled {
-                    // #27 — Set timed out flag to prevent late success callbacks
-                    isTimedOut = true
-                    statusMessage = "Polling timed out. Please check your email."
-                }
+                let elapsed = Date().timeIntervalSince(startTime)
+                let interval: UInt64 = elapsed < 120 ? 500_000_000 : 3_000_000_000
+                try? await Task.sleep(nanoseconds: interval)
             }
         }
     }

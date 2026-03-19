@@ -11,18 +11,6 @@ struct PrestoAIApp: App {
         Settings {
             SettingsView()
         }
-        .handlesExternalEvents(matching: ["prestoai"])
-    }
-
-    init() {
-        // Register for URL events via NSAppleEventManager (needed for menu-bar apps
-        // that don't have a WindowGroup to attach .onOpenURL to).
-        NSAppleEventManager.shared().setEventHandler(
-            PrestoAIURLHandler.shared,
-            andSelector: #selector(PrestoAIURLHandler.handleURL(_:withReplyEvent:)),
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
-        )
     }
 }
 
@@ -46,26 +34,6 @@ func makePrestoPanel(size: NSSize, title: String = "") -> NSPanel {
     panel.center()
     panel.level = .floating
     return panel
-}
-
-
-// MARK: - Custom URL Scheme Handler
-
-class PrestoAIURLHandler: NSObject {
-    static let shared = PrestoAIURLHandler()
-
-    @objc func handleURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
-        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: urlString) else { return }
-
-        if url.host == "checkout-success" || url.path.contains("checkout-success") || urlString.contains("checkout-success") {
-            print("[Presto.AI] Received checkout-success deep link, refreshing auth state...")
-            NotificationCenter.default.post(name: .checkoutCompleted, object: nil)
-            Task {
-                await AppStateManager.shared.initializeState()
-            }
-        }
-    }
 }
 
 

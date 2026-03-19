@@ -22,17 +22,6 @@
 			</dict>
 		</dict>
 	</dict>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.prestoai.app</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>prestoai</string>
-			</array>
-		</dict>
-	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Presto AI needs screen recording permission to capture the region you select for analysis.</string>
 </dict>
