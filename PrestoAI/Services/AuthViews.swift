@@ -344,6 +344,7 @@ struct CheckoutStatusView: View {
                         return
                     }
                     let status = try await APIService.shared.validateAuth(token: jwt)
+                    print("[Checkout] Poll result: state=\(status.state), email=\(status.email ?? "nil")")
 
                     await MainActor.run {
                         // #27 — Ignore success if already timed out
@@ -363,7 +364,7 @@ struct CheckoutStatusView: View {
                         }
                     }
                 } catch {
-                    // Continue polling on error
+                    print("[Checkout] Poll error: \(error)")
                 }
                 
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
