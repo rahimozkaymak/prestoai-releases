@@ -202,12 +202,24 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
-    func showPromptInput() {
+    /// Callback for Study Mode pause/resume toggle
+    var onStudyPauseToggle: (() -> Void)?
+    /// Callback for Study Mode stop
+    var onStudyStop: (() -> Void)?
+    /// Whether currently showing Study Mode prompt
+    private var isStudyMode = false
+
+    func showPromptInput(studyMode: Bool = false) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isPromptMode = true
+            self.isStudyMode = studyMode
             self.ensurePromptWindow()
-            self.webView?.loadHTMLString(self.promptInputHTML(), baseURL: nil)
+            if studyMode {
+                self.webView?.loadHTMLString(self.studyModePromptHTML(), baseURL: nil)
+            } else {
+                self.webView?.loadHTMLString(self.promptInputHTML(), baseURL: nil)
+            }
             self.presentPrompt()
         }
     }
@@ -269,6 +281,10 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             if let prompt = dict["prompt"] as? String, !prompt.isEmpty {
                 onFollowUpSubmit?(prompt)
             }
+        case "studyPause":
+            onStudyPauseToggle?()
+        case "studyStop":
+            onStudyStop?()
         default: break
         }
     }
@@ -1106,6 +1122,124 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             }
         });
         // Auto-focus after page load
+        setTimeout(function() { input.focus(); }, 50);
+        setTheme(\(isDarkMode));
+        </script>
+        </body></html>
+        """
+    }
+
+    private func studyModePromptHTML() -> String {
+        """
+        <!DOCTYPE html><html>
+        \(sharedHead(extraStyle: """
+        .prompt-area {
+            position: absolute; top: 36px; left: 0; right: 0; bottom: 0;
+            display: flex; align-items: center;
+            padding: 0 12px 10px 12px;
+        }
+        .prompt-field {
+            width: 100%;
+            background: var(--subtle-bg);
+            border: 1px solid var(--subtle-border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 13px;
+            padding: 8px 12px;
+            outline: none;
+            resize: none;
+        }
+        .prompt-field::placeholder { color: var(--loading-text); }
+        .prompt-field:focus { border-color: var(--link-color); }
+        .study-controls {
+            display: flex; align-items: center; gap: 6px; margin-left: auto;
+        }
+        .study-btn {
+            background: var(--subtle-bg);
+            border: 1px solid var(--subtle-border);
+            border-radius: 5px;
+            color: var(--text-dim);
+            font-size: 11px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            transition: background 0.15s, color 0.15s;
+        }
+        .study-btn:hover {
+            background: var(--subtle-border);
+            color: var(--text);
+        }
+        .study-status {
+            font-size: 11px;
+            color: var(--loading-text);
+            margin-left: 2px;
+        }
+        .study-dot {
+            display: inline-block;
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: #4ade80;
+            margin-right: 4px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .study-dot.paused {
+            background: #f59e0b;
+            animation: none;
+        }
+        """))
+        <body>
+        <div class="drag-bar">
+            <img class="logo" src="data:image/png;base64,\(iconB64)">
+            <span class="study-status"><span class="study-dot" id="statusDot"></span><span id="statusLabel">Study Mode</span></span>
+            <span class="drag-spacer"></span>
+            <div class="study-controls">
+                <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
+                <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
+            </div>
+        </div>
+        <div class="prompt-area">
+            <input class="prompt-field" id="promptInput"
+                   type="text" placeholder="Ask Presto anything\u{2026}"
+                   autocomplete="off" autofocus>
+        </div>
+        <script>
+        var isPaused = false;
+        function togglePause() {
+            isPaused = !isPaused;
+            document.getElementById('pauseBtn').textContent = isPaused ? 'Resume' : 'Pause';
+            var dot = document.getElementById('statusDot');
+            dot.className = isPaused ? 'study-dot paused' : 'study-dot';
+            document.getElementById('statusLabel').textContent = isPaused ? 'Paused' : 'Study Mode';
+            window.webkit.messageHandlers.overlay.postMessage({action:'studyPause'});
+        }
+        function stopStudy() {
+            window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
+        }
+        document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
+            if (e.target.closest('.study-controls') || e.target.closest('.logo')) return;
+            e.preventDefault();
+            window.webkit.messageHandlers.overlay.postMessage({action:'dragStart', x: e.screenX, y: e.screenY});
+            function onUp() {
+                window.webkit.messageHandlers.overlay.postMessage({action:'dragEnd'});
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mouseup', onUp);
+        });
+        var input = document.getElementById('promptInput');
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                var text = input.value.trim();
+                if (text) {
+                    window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt: text});
+                }
+            }
+        });
         setTimeout(function() { input.focus(); }, 50);
         setTheme(\(isDarkMode));
         </script>

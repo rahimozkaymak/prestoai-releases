@@ -385,6 +385,41 @@ class APIService {
         return profile.referralCode
     }
     
+    // MARK: - Study Mode
+
+    func analyzeStudyCapture(context: [String: Any]) async throws -> StudySuggestion? {
+        let data = try await post(endpoint: "/api/v1/study/analyze", body: context)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let action = json["action"] as? String else {
+            return nil
+        }
+
+        if action == "none" { return nil }
+
+        guard let text = json["suggestion_text"] as? String,
+              let type = json["suggestion_type"] as? String,
+              let confidence = json["confidence"] as? String,
+              let followUp = json["follow_up_prompt"] as? String else {
+            return nil
+        }
+
+        // Only show medium/high confidence suggestions
+        guard confidence == "medium" || confidence == "high" else { return nil }
+
+        return StudySuggestion(
+            captureId: json["capture_id"] as? String ?? UUID().uuidString,
+            suggestionText: text,
+            suggestionType: type,
+            confidence: confidence,
+            followUpPrompt: followUp
+        )
+    }
+
+    func reportStudySession(body: [String: Any]) async throws {
+        _ = try await post(endpoint: "/api/v1/study/session", body: body)
+    }
+
     // MARK: - HTTP Helpers
     
     private func get(endpoint: String, token: String? = nil, retried: Bool = false) async throws -> Data {

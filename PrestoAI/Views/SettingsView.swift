@@ -3,6 +3,7 @@ import AppKit
 
 enum SettingsTab: String, CaseIterable {
     case settings = "Settings"
+    case studyMode = "Study Mode"
     case myAccount = "My Account"
 }
 
@@ -38,6 +39,8 @@ struct SettingsView: View {
 
                 if selectedTab == .myAccount {
                     myAccountContent
+                } else if selectedTab == .studyMode {
+                    studyModeContent
                 } else {
                     settingsContent
                 }
@@ -45,7 +48,7 @@ struct SettingsView: View {
             .padding(.horizontal, 40)
             Spacer(minLength: 0)
         }
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: selectedTab == .studyMode ? 520 : 420)
         .background(Theme.bg(colorScheme))
         .alert("Sign Out", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
@@ -141,6 +144,65 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 .padding(.top, 8)
             }
+        }
+    }
+
+    // MARK: - Study Mode Tab
+
+    private var studyModeContent: some View {
+        VStack(spacing: 0) {
+            // Study Mode status
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Study Mode")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Theme.text2(colorScheme))
+                    Text(StudyModeManager.shared.isActive ? "Active" : "Inactive")
+                        .font(.system(size: 12))
+                        .foregroundColor(StudyModeManager.shared.isActive ? Color.green.opacity(0.8) : Theme.text4(colorScheme))
+                }
+                Spacer()
+                if stateManager.currentState == .paid {
+                    Button(action: {
+                        StudyModeManager.shared.toggle()
+                    }) {
+                        Text(StudyModeManager.shared.isActive ? "Stop" : "Start")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Theme.text2(colorScheme))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(Theme.subtleBg(colorScheme))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("Pro only")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.text4(colorScheme))
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(Theme.subtleBg(colorScheme))
+            .cornerRadius(8)
+            .padding(.top, 16)
+
+            // Shortcut hint
+            Text("Toggle with \u{2318}\u{21E7}S")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.text4(colorScheme))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
+
+            rowDivider
+
+            // Study Mode settings (sliders + exclusions)
+            ScrollView {
+                StudyModeSettingsView()
+            }
+            .frame(maxHeight: 280)
         }
     }
 

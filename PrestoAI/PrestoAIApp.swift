@@ -45,11 +45,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // Dynamic menu items (updated in place instead of rebuilding the entire menu)
     private var queriesMenuItem: NSMenuItem?
-    
+    private var studyModeMenuItem: NSMenuItem?
+
     private var upgradePromptController: UpgradePromptController?
     private var paywallController: PaywallController?
     private var accountViewController: AccountViewController?
     private var checkoutViewController: CheckoutViewController?
+
+    // Study Mode controllers
+    private var studyNotificationController: StudyNotificationController?
+    private var studyOnboardingController: StudyOnboardingController?
+    private var studySessionSummaryController: StudySessionSummaryController?
     
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
@@ -88,7 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Use Combine or a simple polling approach since AppDelegate isn't a SwiftUI view
         setupStateObserver()
 
-        print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, ESC to dismiss")
+        print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, Cmd+Shift+S for Study Mode, ESC to dismiss")
     }
     
     // FIX #7: Observe state changes from AppStateManager
@@ -171,8 +177,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Capture Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
+
+        // Study Mode toggle
+        let studyItem = NSMenuItem(title: "Study Mode", action: #selector(toggleStudyMode), keyEquivalent: "")
+        menu.addItem(studyItem)
+        self.studyModeMenuItem = studyItem
+
         menu.addItem(NSMenuItem.separator())
-        
+
         // Dynamic: queries remaining (hidden for paid users)
         let queriesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         queriesItem.isEnabled = false
@@ -199,7 +211,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Update dynamic menu items without rebuilding the whole menu.
     private func refreshMenuState() {
         let state = AppStateManager.shared
-        
+
         switch state.currentState {
         case .freeActive:
             queriesMenuItem?.title = "\(state.queriesRemaining) free analyses remaining"
@@ -216,6 +228,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queriesMenuItem?.title = "Cannot connect to server"
             queriesMenuItem?.isHidden = false
         }
+
+        // Update Study Mode menu item
+        let studyMode = StudyModeManager.shared
+        if studyMode.isActive {
+            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))"
+        } else {
+            studyModeMenuItem?.title = "Study Mode"
+        }
+        // Only enable for paid users
+        studyModeMenuItem?.isEnabled = state.currentState == .paid || studyMode.isActive
     }
     
     // MARK: - Custom Menu Bar Icon
@@ -250,7 +272,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func setupServices() {
         overlayManager = OverlayManager()
-        
+        studyNotificationController = StudyNotificationController()
+        studyOnboardingController = StudyOnboardingController()
+        studySessionSummaryController = StudySessionSummaryController()
+
         let hotkeys = HotkeyService.shared
         hotkeys.onCapture = { [weak self] in
             print("[Presto.AI] Hotkey triggered capture")
@@ -263,8 +288,153 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.onEsc = { [weak self] in
             self?.overlayManager?.dismiss()
         }
+        hotkeys.onStudyModeToggle = { [weak self] in
+            print("[Presto.AI] Hotkey triggered Study Mode toggle")
+            self?.toggleStudyMode()
+        }
         hotkeys.registerCapture()
         hotkeys.registerQuickPrompt()
+        hotkeys.registerStudyMode()
+
+        // Wire Study Mode callbacks
+        setupStudyModeCallbacks()
+    }
+
+    // MARK: - Study Mode
+
+    private func setupStudyModeCallbacks() {
+        let studyMode = StudyModeManager.shared
+
+        studyMode.onNeedsOnboarding = { [weak self] in
+            self?.studyOnboardingController?.show(
+                onEnable: {
+                    StudyModeManager.shared.activateAfterOnboarding()
+                    self?.onStudyModeActivated()
+                },
+                onCustomize: {
+                    // Open settings to Study Mode tab, then activate
+                    self?.openStudyModeSettings()
+                    StudyModeManager.shared.activateAfterOnboarding()
+                    self?.onStudyModeActivated()
+                }
+            )
+        }
+
+        studyMode.onSuggestionAccepted = { [weak self] followUpPrompt in
+            // Route through existing answer pipeline
+            Task {
+                guard let screenshot = await self?.captureForStudyMode() else { return }
+                await MainActor.run {
+                    self?.sendWithPrompt(screenshot: screenshot, prompt: followUpPrompt)
+                }
+            }
+        }
+
+        studyMode.onSessionEnded = { [weak self] summary in
+            self?.overlayManager?.dismiss()
+            self?.studySessionSummaryController?.show(summary: summary)
+            self?.refreshMenuState()
+        }
+
+        // Observe suggestion changes
+        let cancellable = studyMode.$currentSuggestion.sink { [weak self] suggestion in
+            guard let suggestion = suggestion else { return }
+            self?.studyNotificationController?.show(
+                suggestion: suggestion,
+                onAccept: { StudyModeManager.shared.acceptSuggestion() },
+                onDismiss: { StudyModeManager.shared.dismissSuggestion() }
+            )
+        }
+        objc_setAssociatedObject(self, "studySuggestionCancellable", cancellable, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
+    @objc private func toggleStudyMode() {
+        let stateManager = AppStateManager.shared
+
+        if stateManager.isOffline {
+            overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+            return
+        }
+
+        let studyMode = StudyModeManager.shared
+
+        if studyMode.isActive {
+            studyMode.deactivate()
+        } else {
+            // Check paid status
+            if stateManager.currentState != .paid {
+                showPaywall()
+                return
+            }
+            studyMode.activate()
+            if studyMode.isActive {
+                onStudyModeActivated()
+            }
+        }
+        refreshMenuState()
+    }
+
+    private func onStudyModeActivated() {
+        // Show the Study Mode variant of the prompt overlay
+        overlayManager?.onPromptSubmit = { [weak self] text in
+            StudyModeManager.shared.recordQuestionAsked()
+            Task {
+                guard let screenshot = await self?.captureForStudyMode() else { return }
+                let contextPrefix = StudyModeManager.shared.buildSessionContextPrompt() ?? ""
+                let fullPrompt = contextPrefix.isEmpty ? text : "\(contextPrefix)\n\nUser question: \(text)"
+                await MainActor.run {
+                    self?.sendWithPrompt(screenshot: screenshot, prompt: fullPrompt)
+                }
+            }
+        }
+        overlayManager?.onStudyPauseToggle = {
+            let sm = StudyModeManager.shared
+            sm.isPaused ? sm.resume() : sm.pause()
+        }
+        overlayManager?.onStudyStop = { [weak self] in
+            StudyModeManager.shared.deactivate()
+            self?.overlayManager?.dismiss()
+        }
+        overlayManager?.showPromptInput(studyMode: true)
+        refreshMenuState()
+    }
+
+    private func captureForStudyMode() async -> String? {
+        guard CGPreflightScreenCaptureAccess() else { return nil }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let cgImage = CGWindowListCreateImage(
+                    CGRect.null,
+                    .optionOnScreenOnly,
+                    kCGNullWindowID,
+                    [.bestResolution]
+                ) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let bitmap = NSBitmapImageRep(cgImage: cgImage)
+                guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: pngData.base64EncodedString())
+            }
+        }
+    }
+
+    private func openStudyModeSettings() {
+        if let existing = settingsPanel, existing.isVisible {
+            existing.orderOut(nil)
+        }
+        let panel = makePrestoPanel(size: NSSize(width: 420, height: 520), title: "Settings")
+        panel.hidesOnDeactivate = false
+        panel.contentView = NSHostingView(rootView: SettingsView(initialTab: .studyMode, onUpgrade: { [weak panel] in
+            panel?.orderOut(nil)
+            self.showAccountCreation()
+        }))
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        self.settingsPanel = panel
     }
     
     // MARK: - Actions
