@@ -113,10 +113,10 @@ class VisionClickController {
                     cropOrigin: zoom.cropOrigin
                 )
 
-                // Convert image pixels → screen points
-                let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-                let screenX = self.windowFrame.origin.x + preciseImagePoint.x / scale
-                let screenY = self.windowFrame.origin.y + preciseImagePoint.y / scale
+                // NSImage coordinates are already in screen points (not retina pixels)
+                // so no scaling needed — just offset by capture origin
+                let screenX = self.windowFrame.origin.x + preciseImagePoint.x
+                let screenY = self.windowFrame.origin.y + preciseImagePoint.y
                 let screenPoint = CGPoint(x: screenX, y: screenY)
 
                 print("[VisionClick] Clicking at screen point: (\(Int(screenX)), \(Int(screenY)))")
