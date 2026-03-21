@@ -18,9 +18,16 @@ class VisionClickController {
 
         originalScreenshot = capture.image
         windowFrame = capture.windowFrame
-        let imgW = Int(capture.image.size.width)
-        let imgH = Int(capture.image.size.height)
-        print("[VisionClick] Captured screen: \(imgW)x\(imgH)")
+        let screenW = capture.image.size.width
+        let screenH = capture.image.size.height
+        // ImageCompressor resizes to 1024px max side — compute what Claude actually sees
+        let maxSide: CGFloat = 1024
+        let compressScale = (screenW > screenH)
+            ? maxSide / screenW
+            : maxSide / screenH
+        let claudeW = Int(screenW * compressScale)
+        let claudeH = Int(screenH * compressScale)
+        print("[VisionClick] Screen: \(Int(screenW))x\(Int(screenH)), Claude sees: \(claudeW)x\(claudeH), scale: \(1.0/compressScale)")
 
         guard let base64 = imageToBase64JPEG(capture.image) else {
             completion(false, "Failed to encode screenshot.")
@@ -30,9 +37,9 @@ class VisionClickController {
         // Step 2: Show loading
         DispatchQueue.main.async { overlayManager?.showLoading() }
 
-        // Step 3: Ask Claude for direct pixel coordinates
+        // Step 3: Ask Claude for pixel coordinates in the COMPRESSED image dimensions
         let prompt = """
-        CLICK TASK. This screenshot is \(imgW)x\(imgH) pixels. Origin is top-left corner (0,0).
+        CLICK TASK. This screenshot is \(claudeW)x\(claudeH) pixels. Origin is top-left corner (0,0).
 
         The user wants to: \(command)
 
@@ -43,6 +50,9 @@ class VisionClickController {
         If you cannot find it: NOTFOUND:brief reason
         Nothing else. Just CLICK:x,y or NOTFOUND:reason.
         """
+
+        // Store the scale factor for converting Claude's coords back to screen coords
+        let coordScale = 1.0 / compressScale
 
         callClaudeWithImage(base64Image: base64, prompt: prompt) { [weak self] response in
             guard let self = self else { return }
@@ -58,10 +68,13 @@ class VisionClickController {
                 return
             }
 
-            let screenPoint = CGPoint(x: coords.x, y: coords.y)
-            print("[VisionClick] Initial target: (\(Int(coords.x)), \(Int(coords.y)))")
+            // Scale from compressed image coords → screen coords
+            let screenX = coords.x * coordScale
+            let screenY = coords.y * coordScale
+            let screenPoint = CGPoint(x: screenX, y: screenY)
+            print("[VisionClick] Claude coords: (\(Int(coords.x)),\(Int(coords.y))) → screen: (\(Int(screenX)),\(Int(screenY)))")
 
-            // Step 4: Verification loop — move cursor, screenshot, ask Claude to confirm/adjust
+            // Step 4: Verification loop
             self.verifyAndClick(at: screenPoint, command: command, attempt: 1, completion: completion)
         }
     }
