@@ -6,7 +6,7 @@ class VisionClickController {
     private var originalScreenshot: NSImage?
     private var windowFrame: CGRect = .zero  // Window frame in screen coordinates (top-left origin, points)
 
-    /// The full two-pass vision click flow.
+    /// Direct coordinate approach — ask Claude for pixel coordinates, then verify.
     func executeCommand(_ command: String, targetApp: NSRunningApplication, overlayManager: OverlayManager?, completion: @escaping (Bool, String) -> Void) {
         print("[VisionClick] Command: \(command), target: \(targetApp.localizedName ?? "?")")
 
@@ -18,111 +18,63 @@ class VisionClickController {
 
         originalScreenshot = capture.image
         windowFrame = capture.windowFrame
-        print("[VisionClick] Captured window: \(Int(windowFrame.width))x\(Int(windowFrame.height)) at (\(Int(windowFrame.origin.x)),\(Int(windowFrame.origin.y)))")
+        let imgW = Int(capture.image.size.width)
+        let imgH = Int(capture.image.size.height)
+        print("[VisionClick] Captured screen: \(imgW)x\(imgH)")
 
-        // Step 2: Apply coarse grid
-        let griddedImage = GridOverlay.applyGrid(to: capture.image)
-        guard let griddedBase64 = imageToBase64JPEG(griddedImage) else {
+        guard let base64 = imageToBase64JPEG(capture.image) else {
             completion(false, "Failed to encode screenshot.")
             return
         }
 
-        // Step 3: Show loading in overlay
+        // Step 2: Show loading
         DispatchQueue.main.async { overlayManager?.showLoading() }
 
-        // Step 4: First API call — coarse pass
-        let coarsePrompt = """
-        IMPORTANT: You are in GRID CLICK MODE. The screenshot has a coordinate grid overlaid.
-        Columns are labeled A, B, C... across the top. Rows are labeled 1, 2, 3... down the left side.
+        // Step 3: Ask Claude for direct pixel coordinates
+        let prompt = """
+        CLICK TASK. This screenshot is \(imgW)x\(imgH) pixels. Origin is top-left corner (0,0).
 
         The user wants to: \(command)
 
-        Find the UI element on screen and respond with ONLY the grid cell where its CENTER is.
-        Your ENTIRE response must be exactly in this format, nothing else:
-        CELL:G4
+        Find the CENTER of that UI element and respond with ONLY its pixel coordinates.
+        Your ENTIRE response must be exactly: CLICK:x,y
+        Example: CLICK:350,490
 
-        If you truly cannot find it, respond with exactly:
-        NOTFOUND:brief reason
-
-        Do NOT explain anything. Just output CELL:XX or NOTFOUND:reason.
+        If you cannot find it: NOTFOUND:brief reason
+        Nothing else. Just CLICK:x,y or NOTFOUND:reason.
         """
 
-        callClaudeWithImage(base64Image: griddedBase64, prompt: coarsePrompt) { [weak self] coarseResponse in
+        callClaudeWithImage(base64Image: base64, prompt: prompt) { [weak self] response in
             guard let self = self else { return }
-            print("[VisionClick] Coarse response: \(coarseResponse)")
+            print("[VisionClick] Response: \(response)")
 
-            guard let coarseCell = self.parseCoarseResponse(coarseResponse) else {
+            guard let coords = self.parseClickResponse(response) else {
                 DispatchQueue.main.async {
-                    let reason = coarseResponse.contains("NOTFOUND:") ?
-                        String(coarseResponse.split(separator: ":").dropFirst().joined(separator: ":")) :
+                    let reason = response.contains("NOTFOUND:") ?
+                        String(response.split(separator: ":").dropFirst().joined(separator: ":")) :
                         "Could not find that element. Try describing it differently."
                     completion(false, reason)
                 }
                 return
             }
 
-            let coarseCenter = GridOverlay.centerPoint(column: coarseCell.column, row: coarseCell.row)
-            print("[VisionClick] Coarse center: \(coarseCenter) (cell \(coarseCell.column)\(coarseCell.row))")
+            let screenPoint = CGPoint(x: coords.x, y: coords.y)
+            print("[VisionClick] Initial target: (\(Int(coords.x)), \(Int(coords.y)))")
 
-            // Step 5: Zoom pass
-            guard let original = self.originalScreenshot,
-                  let zoom = ZoomCrop.zoomAroundPoint(image: original, coarseCenter: coarseCenter) else {
-                DispatchQueue.main.async { completion(false, "Failed to zoom into the target area.") }
-                return
-            }
-
-            guard let zoomedBase64 = self.imageToBase64JPEG(zoom.zoomedImage) else {
-                DispatchQueue.main.async { completion(false, "Failed to encode zoomed image.") }
-                return
-            }
-
-            // Step 6: Second API call — fine pass
-            let finePrompt = """
-            IMPORTANT: You are in PRECISION CLICK MODE. This is a zoomed-in view of a UI element.
-            The image has a fine coordinate grid. Columns are labeled 1-20 across the top.
-            Rows are labeled 1-20 down the left side.
-
-            Find the exact CENTER of the clickable element and respond with ONLY the grid coordinates.
-            Your ENTIRE response must be exactly in this format, nothing else:
-            CELL:12,8
-
-            (That means column,row — both are numbers.)
-            If the element is not visible, respond with exactly:
-            NOTFOUND:brief reason
-
-            Do NOT explain anything. Just output CELL:col,row or NOTFOUND:reason.
-            """
-
-            self.callClaudeWithImage(base64Image: zoomedBase64, prompt: finePrompt) { fineResponse in
-                print("[VisionClick] Fine response: \(fineResponse)")
-
-                guard let fineCell = self.parseFineResponse(fineResponse) else {
-                    DispatchQueue.main.async {
-                        let reason = fineResponse.contains("NOTFOUND:") ?
-                            String(fineResponse.split(separator: ":").dropFirst().joined(separator: ":")) :
-                            "Could not precisely locate the element."
-                        completion(false, reason)
-                    }
-                    return
-                }
-
-                // Step 7: Map to screen coordinates
-                let preciseImagePoint = ZoomCrop.mapToScreenCoordinates(
-                    fineColumn: fineCell.column,
-                    fineRow: fineCell.row,
-                    cropOrigin: zoom.cropOrigin
-                )
-
-                let screenX = self.windowFrame.origin.x + preciseImagePoint.x
-                let screenY = self.windowFrame.origin.y + preciseImagePoint.y
-                let screenPoint = CGPoint(x: screenX, y: screenY)
-
-                print("[VisionClick] Initial target: (\(Int(screenX)), \(Int(screenY)))")
-
-                // Step 8: Verification loop — move cursor, screenshot, ask Claude to confirm
-                self.verifyAndClick(at: screenPoint, command: command, attempt: 1, completion: completion)
-            }
+            // Step 4: Verification loop — move cursor, screenshot, ask Claude to confirm/adjust
+            self.verifyAndClick(at: screenPoint, command: command, attempt: 1, completion: completion)
         }
+    }
+
+    /// Parse "CLICK:350,490" → (x: 350, y: 490)
+    private func parseClickResponse(_ response: String) -> (x: CGFloat, y: CGFloat)? {
+        guard let range = response.range(of: "CLICK:", options: .caseInsensitive) else { return nil }
+        let coordStr = String(response[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = coordStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count >= 2,
+              let x = Double(parts[0]),
+              let y = Double(parts[1]) else { return nil }
+        return (CGFloat(x), CGFloat(y))
     }
 
     // MARK: - Verification Loop
