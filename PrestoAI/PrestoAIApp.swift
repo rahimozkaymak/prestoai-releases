@@ -53,10 +53,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var checkoutViewController: CheckoutViewController?
 
     // Study Mode controllers
-    private var studyNotificationController: StudyNotificationController?
     private var studyOnboardingController: StudyOnboardingController?
-    private var studySessionSummaryController: StudySessionSummaryController?
-    
+
+    // Accessibility scan
+    private let accessibilityExecutor = AccessibilityExecutor()
+
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
     
@@ -94,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Use Combine or a simple polling approach since AppDelegate isn't a SwiftUI view
         setupStateObserver()
 
-        print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, Cmd+Shift+S for Study Mode, ESC to dismiss")
+        print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, Cmd+Shift+S for Study Mode, Cmd+Shift+D for accessibility scan, ESC to dismiss")
     }
     
     // FIX #7: Observe state changes from AppStateManager
@@ -272,9 +273,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func setupServices() {
         overlayManager = OverlayManager()
-        studyNotificationController = StudyNotificationController()
         studyOnboardingController = StudyOnboardingController()
-        studySessionSummaryController = StudySessionSummaryController()
 
         let hotkeys = HotkeyService.shared
         hotkeys.onCapture = { [weak self] in
@@ -292,9 +291,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("[Presto.AI] Hotkey triggered Study Mode toggle")
             self?.toggleStudyMode()
         }
+        hotkeys.onAccessibilityScan = { [weak self] in
+            print("[Presto.AI] Hotkey triggered accessibility scan")
+            self?.performAccessibilityScan()
+        }
         hotkeys.registerCapture()
         hotkeys.registerQuickPrompt()
         hotkeys.registerStudyMode()
+        hotkeys.registerAccessibilityScan()
 
         // Wire Study Mode callbacks
         setupStudyModeCallbacks()
@@ -332,18 +336,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         studyMode.onSessionEnded = { [weak self] summary in
             self?.overlayManager?.dismiss()
-            self?.studySessionSummaryController?.show(summary: summary)
+            // Show summary in popup overlay (same frosted glass style)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self?.overlayManager?.showStudySummary(text: summary)
+            }
             self?.refreshMenuState()
+        }
+
+        // Wire suggestion accept/dismiss through overlay manager
+        overlayManager?.onSuggestionAccept = {
+            StudyModeManager.shared.acceptSuggestion()
+        }
+        overlayManager?.onSuggestionDismiss = {
+            StudyModeManager.shared.dismissSuggestion()
         }
 
         // Observe suggestion changes
         let cancellable = studyMode.$currentSuggestion.sink { [weak self] suggestion in
             guard let suggestion = suggestion else { return }
-            self?.studyNotificationController?.show(
-                suggestion: suggestion,
-                onAccept: { StudyModeManager.shared.acceptSuggestion() },
-                onDismiss: { StudyModeManager.shared.dismissSuggestion() }
-            )
+            self?.overlayManager?.showStudySuggestion(text: suggestion.suggestionText)
         }
         objc_setAssociatedObject(self, "studySuggestionCancellable", cancellable, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
@@ -375,16 +386,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func onStudyModeActivated() {
-        // Show the Study Mode variant of the prompt overlay
+        // Show the Study Mode bar (persistent, compact, bottom-right)
         overlayManager?.onPromptSubmit = { [weak self] text in
+            guard let self = self else { return }
             StudyModeManager.shared.recordQuestionAsked()
+
+            // Expand the bar to show the answer area
+            self.overlayManager?.expandStudyBar()
+
+            // Capture screen and stream into the study bar
             Task {
-                guard let screenshot = await self?.captureForStudyMode() else { return }
+                guard let screenshot = await self.captureForStudyMode() else { return }
                 let contextPrefix = StudyModeManager.shared.buildSessionContextPrompt() ?? ""
                 let fullPrompt = contextPrefix.isEmpty ? text : "\(contextPrefix)\n\nUser question: \(text)"
-                await MainActor.run {
-                    self?.sendWithPrompt(screenshot: screenshot, prompt: fullPrompt)
-                }
+
+                let (compressed, mediaType) = ImageCompressor.compress(screenshot)
+                let stateManager = AppStateManager.shared
+                let deviceID = stateManager.deviceID
+                let bodyDict: [String: Any] = [
+                    "image": compressed,
+                    "prompt": fullPrompt,
+                    "media_type": mediaType,
+                    "device_id": deviceID
+                ]
+
+                var isFirstChunk = true
+                APIService.shared.sendScreenshot(screenshot, prompt: fullPrompt,
+                    onChunk: { [weak self] chunk in
+                        if isFirstChunk {
+                            isFirstChunk = false
+                        }
+                        self?.overlayManager?.appendChunk(chunk)
+                    },
+                    onComplete: { [weak self] queriesRemaining, state in
+                        Task { @MainActor in
+                            self?.overlayManager?.signalStreamEnd()
+                            stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
+                        }
+                    },
+                    onError: { [weak self] error in
+                        self?.overlayManager?.showError(error.localizedDescription)
+                    }
+                )
             }
         }
         overlayManager?.onStudyPauseToggle = {
@@ -393,7 +436,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         overlayManager?.onStudyStop = { [weak self] in
             StudyModeManager.shared.deactivate()
-            self?.overlayManager?.dismiss()
         }
         overlayManager?.showPromptInput(studyMode: true)
         refreshMenuState()
@@ -502,6 +544,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    // MARK: - Accessibility Scan (Cmd+Shift+D)
+
+    private func performAccessibilityScan() {
+        // Check accessibility trust, prompting if needed
+        if !AccessibilityScanner.isTrusted(prompt: true) {
+            print("[Presto.AI] Accessibility permission not granted — prompting user")
+            overlayManager?.showError("Accessibility permission required. Grant access in System Settings → Privacy & Security → Accessibility, then press Cmd+Shift+D again.")
+            return
+        }
+
+        overlayManager?.showLoading()
+
+        // Run scan on background queue, then capture + composite on completion
+        AccessibilityScanner.scan { [weak self] elements, elementMap in
+            guard let self = self else { return }
+
+            self.accessibilityExecutor.update(map: elementMap)
+
+            // Print element list to console for debugging
+            print("[AccessibilityScan] Found \(elements.count) interactive elements:")
+            for el in elements {
+                print("  \(el.summaryLine)")
+            }
+
+            // Capture the frontmost window and composite badges
+            Task {
+                guard let capture = await AccessibilityOverlay.captureFrontmostWindow() else {
+                    await MainActor.run {
+                        // Fallback: show element list without screenshot
+                        self.showAccessibilityScanTextOnly(elements: elements)
+                    }
+                    return
+                }
+
+                guard let composited = AccessibilityOverlay.compositeBadges(
+                    on: capture.image, windowFrame: capture.windowFrame, elements: elements
+                ) else {
+                    await MainActor.run {
+                        self.showAccessibilityScanTextOnly(elements: elements)
+                    }
+                    return
+                }
+
+                await MainActor.run {
+                    self.overlayManager?.showAccessibilityScan(imageBase64: composited.base64PNG, elements: elements)
+                }
+            }
+        }
+    }
+
+    /// Fallback when screenshot capture fails — show just the element list
+    private func showAccessibilityScanTextOnly(elements: [ScannedElement]) {
+        let lines = elements.map { $0.summaryLine }.joined(separator: "\n")
+        overlayManager?.showError("Accessibility scan found \(elements.count) elements (screenshot unavailable):\n\n\(lines)")
+    }
+
     private func quickPromptCapture() {
         let stateManager = AppStateManager.shared
 

@@ -14,11 +14,13 @@ class HotkeyService {
     private var quickPromptHotKeyRef: EventHotKeyRef?
     private var escHotKeyRef: EventHotKeyRef?
     private var studyModeHotKeyRef: EventHotKeyRef?
+    private var accessibilityScanHotKeyRef: EventHotKeyRef?
 
     var onCapture: (() -> Void)?
     var onQuickPrompt: (() -> Void)?
     var onEsc: (() -> Void)?
     var onStudyModeToggle: (() -> Void)?
+    var onAccessibilityScan: (() -> Void)?
     
     private init() {
         installCarbonHandler()
@@ -113,6 +115,20 @@ class HotkeyService {
         print("[Hotkey] Cmd+Shift+S registered: \(status == noErr)")
     }
     
+    /// Register Cmd+Shift+D globally (accessibility scan)
+    func registerAccessibilityScan() {
+        let hotKeyID = EventHotKeyID(signature: hotKeySignature(), id: 5)
+        let status = RegisterEventHotKey(
+            UInt32(kVK_ANSI_D),           // keycode for D
+            UInt32(cmdKey | shiftKey),     // modifiers
+            hotKeyID,
+            GetEventDispatcherTarget(),
+            0,
+            &accessibilityScanHotKeyRef
+        )
+        print("[Hotkey] Cmd+Shift+D registered: \(status == noErr)")
+    }
+
     /// Register ESC globally (call when overlay appears)
     func registerEsc() {
         guard escHotKeyRef == nil else { return } // already registered
@@ -152,6 +168,9 @@ class HotkeyService {
         case 4:
             print("[Hotkey] Cmd+Shift+S fired")
             onStudyModeToggle?()
+        case 5:
+            print("[Hotkey] Cmd+Shift+D fired")
+            onAccessibilityScan?()
         default:
             break
         }
@@ -170,6 +189,7 @@ class HotkeyService {
         if let ref = quickPromptHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = escHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = studyModeHotKeyRef { UnregisterEventHotKey(ref) }
+        if let ref = accessibilityScanHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = eventHandlerRef { RemoveEventHandler(ref) }
     }
 }

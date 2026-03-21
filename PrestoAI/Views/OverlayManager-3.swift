@@ -23,6 +23,11 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     // Follow-up conversation state
     private var conversationHistory: [(question: String, answer: String)] = []
     private var currentScreenshot: String?
+
+    // Secondary popup (suggestion notification / session summary)
+    private var popupPanel: OverlayPanel?
+    private var popupWebView: WKWebView?
+    private var popupDismissTimer: Timer?
     var onFollowUpSubmit: ((String) -> Void)?
 
     private let defaultWidth:  CGFloat = 420
@@ -202,26 +207,253 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
+    // MARK: - Accessibility Scan Results
+
+    /// Last accessibility scan data (image + element list) for follow-up API calls
+    private(set) var lastAccessibilityScanBase64: String?
+    private(set) var lastAccessibilityScanElements: [ScannedElement] = []
+
+    /// Display the annotated screenshot and element list from an accessibility scan.
+    func showAccessibilityScan(imageBase64: String, elements: [ScannedElement]) {
+        lastAccessibilityScanBase64 = imageBase64
+        lastAccessibilityScanElements = elements
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.ensureWindow()
+            self.webView?.loadHTMLString(self.accessibilityScanHTML(imageBase64: imageBase64, elements: elements), baseURL: nil)
+            self.present()
+        }
+    }
+
+    private func accessibilityScanHTML(imageBase64: String, elements: [ScannedElement]) -> String {
+        let elementRows = elements.map { el -> String in
+            let escaped = el.summaryLine
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            let enabledClass = el.isEnabled ? "" : " disabled"
+            return "<div class=\"el-row\(enabledClass)\">\(escaped)</div>"
+        }.joined(separator: "\n")
+
+        return """
+        <!DOCTYPE html>
+        <html>
+        \(sharedHead(extraStyle: """
+        .scan-img {
+            width: 100%;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .scan-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+        .scan-count {
+            font-size: 11px;
+            color: var(--loading-text);
+            margin-bottom: 8px;
+        }
+        .el-list {
+            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+        }
+        .el-row {
+            padding: 2px 0;
+            border-bottom: 1px solid var(--subtle-border);
+        }
+        .el-row.disabled {
+            opacity: 0.5;
+        }
+        """))
+        <body>
+        \(headerHTML())
+        <div class="content-area">
+            <div class="scan-title">Accessibility Scan</div>
+            <img class="scan-img" src="data:image/png;base64,\(imageBase64)">
+            <div class="scan-count">\(elements.count) interactive elements found</div>
+            <div class="el-list">
+            \(elementRows)
+            </div>
+        </div>
+        \(bottomBarHTML())
+        \(gripJS())
+        </body>
+        </html>
+        """
+    }
+
     /// Callback for Study Mode pause/resume toggle
     var onStudyPauseToggle: (() -> Void)?
     /// Callback for Study Mode stop
     var onStudyStop: (() -> Void)?
+    /// Callback for suggestion accept / dismiss
+    var onSuggestionAccept: (() -> Void)?
+    var onSuggestionDismiss: (() -> Void)?
     /// Whether currently showing Study Mode prompt
     private var isStudyMode = false
+
+    // MARK: - Study Suggestion Popup
+
+    func showStudySuggestion(text: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.dismissPopup()
+            self.createPopup(width: 340, height: 130, position: .topRight)
+            self.popupWebView?.loadHTMLString(self.suggestionHTML(text: text), baseURL: nil)
+            self.popupPanel?.alphaValue = 0
+            self.popupPanel?.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.25
+                self.popupPanel?.animator().alphaValue = 1.0
+            }
+            // Auto-dismiss after 10s
+            self.popupDismissTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
+                self?.onSuggestionDismiss?()
+                self?.dismissPopup()
+            }
+        }
+    }
+
+    func showStudySummary(text: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.dismissPopup()
+            self.createPopup(width: 300, height: 70, position: .topCenter)
+            self.popupWebView?.loadHTMLString(self.summaryHTML(text: text), baseURL: nil)
+            self.popupPanel?.alphaValue = 0
+            self.popupPanel?.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.3
+                self.popupPanel?.animator().alphaValue = 1.0
+            }
+            // Auto-dismiss after 2s
+            self.popupDismissTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                self?.dismissPopup()
+            }
+        }
+    }
+
+    func dismissPopup() {
+        popupDismissTimer?.invalidate()
+        popupDismissTimer = nil
+        guard let panel = popupPanel else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.popupWebView?.configuration.userContentController.removeAllScriptMessageHandlers()
+            self?.popupWebView = nil
+            panel.orderOut(nil)
+            self?.popupPanel = nil
+        })
+    }
+
+    private enum PopupPosition { case topRight, topCenter }
+
+    private func createPopup(width: CGFloat, height: CGFloat, position: PopupPosition) {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let origin: NSPoint
+        switch position {
+        case .topRight:
+            origin = NSPoint(x: screen.maxX - width - 16, y: screen.maxY - height - 16)
+        case .topCenter:
+            origin = NSPoint(x: screen.midX - width / 2, y: screen.maxY - height - 16)
+        }
+
+        let frame = NSRect(origin: origin, size: NSSize(width: width, height: height))
+        let panel = OverlayPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isMovableByWindowBackground = false
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(self, name: "overlay")
+
+        let wv = WKWebView(frame: NSRect(origin: .zero, size: frame.size), configuration: config)
+        wv.autoresizingMask = [.width, .height]
+        wv.setValue(false, forKey: "drawsBackground")
+
+        let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 14
+        container.layer?.masksToBounds = true
+        container.layer?.backgroundColor = Theme.nsOverlayBg(NSApp.effectiveAppearance).cgColor
+        container.addSubview(wv)
+
+        panel.contentView = container
+        self.popupWebView = wv
+        self.popupPanel = panel
+    }
+
+    private let studyBarCompactHeight: CGFloat = 100
+    private let studyBarExpandedHeight: CGFloat = 420
 
     func showPromptInput(studyMode: Bool = false) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isPromptMode = true
             self.isStudyMode = studyMode
-            self.ensurePromptWindow()
             if studyMode {
-                self.webView?.loadHTMLString(self.studyModePromptHTML(), baseURL: nil)
+                self.ensureStudyBarWindow()
+                self.webView?.loadHTMLString(self.studyModeBarHTML(), baseURL: nil)
             } else {
+                self.ensurePromptWindow()
                 self.webView?.loadHTMLString(self.promptInputHTML(), baseURL: nil)
             }
             self.presentPrompt()
         }
+    }
+
+    /// Expand the study bar to show a streamed answer
+    /// Expand upward: keep bottom edge fixed, grow height upward
+    func expandStudyBar() {
+        guard isStudyMode, let window = overlayWindow else { return }
+        let frame = window.frame
+        let newHeight = studyBarExpandedHeight
+        // Keep bottom edge (origin.y) fixed — window grows upward in macOS coords
+        let newFrame = NSRect(
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.width,
+            height: newHeight
+        )
+        window.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
+        window.maxSize = NSSize(width: 9999, height: 9999)
+        window.setFrame(newFrame, display: true, animate: true)
+        webView?.evaluateJavaScript("showResponseArea()", completionHandler: nil)
+    }
+
+    /// Collapse downward: keep bottom edge fixed, shrink height
+    func collapseStudyBar() {
+        guard isStudyMode, let window = overlayWindow else { return }
+        let frame = window.frame
+        let newHeight = studyBarCompactHeight
+        // Keep bottom edge (origin.y) fixed — window shrinks downward
+        let newFrame = NSRect(
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.width,
+            height: newHeight
+        )
+        window.setFrame(newFrame, display: true, animate: true)
+        window.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
+        window.maxSize = NSSize(width: 9999, height: studyBarCompactHeight)
+        webView?.evaluateJavaScript("hideResponseArea()", completionHandler: nil)
     }
 
     // FIX #6: Properly tear down webview to prevent retain cycle
@@ -285,6 +517,14 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             onStudyPauseToggle?()
         case "studyStop":
             onStudyStop?()
+        case "studyCollapse":
+            collapseStudyBar()
+        case "suggestionAccept":
+            dismissPopup()
+            onSuggestionAccept?()
+        case "suggestionDismiss":
+            dismissPopup()
+            onSuggestionDismiss?()
         default: break
         }
     }
@@ -385,6 +625,22 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             frame = defaultFrame()
         }
         createWindow(frame: frame)
+    }
+
+    private func ensureStudyBarWindow() {
+        if overlayWindow != nil { return }
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width: CGFloat = defaultWidth
+        let height = studyBarCompactHeight
+        let frame = NSRect(
+            x: screen.maxX - width - 16,
+            y: screen.minY + 16,
+            width: width,
+            height: height
+        )
+        createWindow(frame: frame)
+        overlayWindow?.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
+        overlayWindow?.maxSize = NSSize(width: 9999, height: studyBarCompactHeight)
     }
 
     private func ensurePromptWindow() {
@@ -1129,12 +1385,13 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         """
     }
 
-    private func studyModePromptHTML() -> String {
+    private func studyModeBarHTML() -> String {
         """
         <!DOCTYPE html><html>
         \(sharedHead(extraStyle: """
+        body { display: flex; flex-direction: column; height: 100vh; }
         .prompt-area {
-            position: absolute; top: 36px; left: 0; right: 0; bottom: 0;
+            position: absolute; left: 0; right: 0; bottom: 0; height: 56px;
             display: flex; align-items: center;
             padding: 0 12px 10px 12px;
         }
@@ -1166,62 +1423,244 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
             transition: background 0.15s, color 0.15s;
         }
-        .study-btn:hover {
-            background: var(--subtle-border);
-            color: var(--text);
-        }
+        .study-btn:hover { background: var(--subtle-border); color: var(--text); }
         .study-status {
-            font-size: 11px;
-            color: var(--loading-text);
-            margin-left: 2px;
+            font-size: 11px; color: var(--loading-text); margin-left: 2px;
         }
         .study-dot {
-            display: inline-block;
-            width: 6px; height: 6px;
-            border-radius: 50%;
-            background: #4ade80;
-            margin-right: 4px;
+            display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+            background: #4ade80; margin-right: 4px;
             animation: pulse 2s ease-in-out infinite;
         }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .study-dot.paused { background: #f59e0b; animation: none; }
+
+        /* Response area (hidden by default, shown when answer streams in) */
+        .response-area {
+            display: none;
+            position: absolute; top: 36px; left: 0; right: 0; bottom: 56px;
+            overflow-y: auto; overflow-x: hidden;
+            padding: 8px 16px;
+            -webkit-overflow-scrolling: auto;
         }
-        .study-dot.paused {
-            background: #f59e0b;
-            animation: none;
+        .response-area.visible { display: block; }
+
+        /* Collapse button */
+        .collapse-btn {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 11px; cursor: pointer; padding: 2px 6px;
+            font-family: -apple-system, sans-serif;
         }
+        .collapse-btn:hover { color: var(--text); }
+
+        /* Content typography (same as main response) */
+        .content { word-wrap: break-word; }
+        .content h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; }
+        .content h2 { font-size: 1.3em; font-weight: 600; margin: 0.7em 0 0.3em; }
+        .content h3 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; }
+        .content p { margin: 0.4em 0; }
+        .content ul, .content ol { padding-left: 1.4em; margin: 0.4em 0; }
+        .content li { margin: 0.15em 0; }
+        .content pre {
+            background: var(--code-bg); border-radius: 6px;
+            padding: 10px 12px; margin: 0.5em 0; overflow-x: auto;
+            font-size: 12px; line-height: 1.45;
+        }
+        .content pre code {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            background: none; padding: 0; font-size: inherit;
+        }
+        .content code {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            background: var(--code-inline-bg); padding: 0.15em 0.35em;
+            border-radius: 3px; font-size: 0.9em;
+        }
+        .content blockquote {
+            border-left: 3px solid var(--blockquote-border);
+            padding-left: 12px; margin: 0.5em 0; color: var(--blockquote-text);
+        }
+        .content a { color: var(--link-color); text-decoration: none; }
+        .content a:hover { text-decoration: underline; }
+        .content table { border-collapse: collapse; margin: 0.5em 0; width: 100%; font-size: 12px; }
+        .content th, .content td { border: 1px solid var(--subtle-border); padding: 4px 8px; }
+        .content th { background: var(--table-header-bg); font-weight: 600; }
+        .content hr { border: none; border-top: 1px solid var(--subtle-border); margin: 0.8em 0; }
+        .content strong { font-weight: 600; }
+        .content em { font-style: italic; }
+        .content img { max-width: 100%; border-radius: 4px; }
+        equation-block { display: block; margin: 0.5em 0; text-align: center; }
+        equation-inline { display: inline; }
+
+        /* Loading spinner */
+        .loading { display: flex; align-items: center; gap: 8px; padding: 12px 0; }
+        .spinner { width: 16px; height: 16px; border: 2px solid var(--spinner-border);
+                   border-top-color: var(--spinner-accent); border-radius: 50%;
+                   animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { font-size: 12px; color: var(--loading-text); }
         """))
-        <body>
-        <div class="drag-bar">
-            <img class="logo" src="data:image/png;base64,\(iconB64)">
-            <span class="study-status"><span class="study-dot" id="statusDot"></span><span id="statusLabel">Study Mode</span></span>
-            <span class="drag-spacer"></span>
-            <div class="study-controls">
-                <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
-                <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
-            </div>
-        </div>
-        <div class="prompt-area">
-            <input class="prompt-field" id="promptInput"
-                   type="text" placeholder="Ask Presto anything\u{2026}"
-                   autocomplete="off" autofocus>
-        </div>
+
+        <!-- streaming-markdown -->
+        <script>\(smdJS)</script>
+
+        <!-- CDN libs for finalization -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" id="hljs-dark">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" id="hljs-light" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js" onload="checkLibs()"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" onload="checkLibs()"></script>
+        <script>
+        MathJax = {
+            tex: { inlineMath: [['$','$'],['\\\\(','\\\\)']], displayMath: [['$$','$$'],['\\\\[','\\\\]']], processEscapes: true },
+            options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+        };
+        </script>
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
         <script>
         var isPaused = false;
+        var rawMarkdown = '';
+        var smdParser = null;
+        var libsReady = false;
+        var pendingFinalize = false;
+
+        function checkLibs() {
+            if (window.marked && window.markedHighlight && window.hljs && window.DOMPurify) {
+                libsReady = true;
+                if (pendingFinalize) { pendingFinalize = false; doFinalize(); }
+            }
+        }
+
         function togglePause() {
             isPaused = !isPaused;
             document.getElementById('pauseBtn').textContent = isPaused ? 'Resume' : 'Pause';
-            var dot = document.getElementById('statusDot');
-            dot.className = isPaused ? 'study-dot paused' : 'study-dot';
+            document.getElementById('statusDot').className = isPaused ? 'study-dot paused' : 'study-dot';
             document.getElementById('statusLabel').textContent = isPaused ? 'Paused' : 'Study Mode';
             window.webkit.messageHandlers.overlay.postMessage({action:'studyPause'});
         }
         function stopStudy() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
         }
+        function collapseResponse() {
+            window.webkit.messageHandlers.overlay.postMessage({action:'studyCollapse'});
+        }
+
+        function showResponseArea() {
+            document.getElementById('responseArea').classList.add('visible');
+            document.getElementById('collapseBtn').style.display = 'inline';
+            var el = document.querySelector('.content');
+            el.innerHTML = '<div class="loading"><div class="spinner"></div><span class="loading-text">Analyzing\\u2026</span></div>';
+            rawMarkdown = '';
+            smdParser = null;
+        }
+        function hideResponseArea() {
+            document.getElementById('responseArea').classList.remove('visible');
+            document.getElementById('collapseBtn').style.display = 'none';
+            document.querySelector('.content').innerHTML = '';
+            rawMarkdown = '';
+            smdParser = null;
+            var input = document.getElementById('promptInput');
+            input.value = '';
+            input.disabled = false;
+            input.focus();
+        }
+
+        function appendChunk(text) {
+            var el = document.querySelector('.content');
+            if (!smdParser) {
+                el.innerHTML = '';
+                var renderer = smd.default_renderer(el);
+                smdParser = smd.parser(renderer);
+            }
+            rawMarkdown += text;
+            smd.parser_write(smdParser, text);
+            // Auto-scroll
+            var area = document.getElementById('responseArea');
+            area.scrollTop = area.scrollHeight;
+        }
+
+        function finalize() {
+            if (smdParser) { smd.parser_end(smdParser); }
+            if (!libsReady) { checkLibs(); }
+            if (libsReady) { doFinalize(); }
+            else {
+                pendingFinalize = true;
+                setTimeout(function() {
+                    if (pendingFinalize) { pendingFinalize = false; runMathJax(); }
+                }, 5000);
+            }
+            // Re-enable input
+            var input = document.getElementById('promptInput');
+            input.disabled = false;
+            input.value = '';
+            input.focus();
+        }
+
+        function doFinalize() {
+            if (!window.marked || !window.hljs) { runMathJax(); return; }
+            var inst = new marked.Marked(
+                markedHighlight.markedHighlight({
+                    emptyLangClass: 'hljs', langPrefix: 'hljs language-',
+                    highlight: function(code, lang) {
+                        if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, {language:lang}).value;
+                        return hljs.highlightAuto(code).value;
+                    }
+                })
+            );
+            var renderer = new marked.Renderer();
+            renderer.link = function(d) {
+                var h = d.href||'', t = d.title?' title="'+d.title+'"':'', x = d.text||'';
+                return '<a href="'+h+'"'+t+' target="_blank" rel="noopener noreferrer">'+x+'</a>';
+            };
+            inst.use({renderer:renderer});
+
+            var mathStore = [];
+            var processed = rawMarkdown;
+            function extractMath(text,open,close,store) {
+                var s=0;
+                while(s<text.length){var a=text.indexOf(open,s);if(a===-1)break;var b=text.indexOf(close,a+open.length);if(b===-1)break;var m=text.substring(a,b+close.length);var ph='%%MATH_'+store.length+'%%';store.push(m);text=text.substring(0,a)+ph+text.substring(b+close.length);s=a+ph.length;}
+                return text;
+            }
+            processed=extractMath(processed,'$$','$$',mathStore);
+            var pos=0;
+            while(pos<processed.length){var a=processed.indexOf('$',pos);if(a===-1)break;var nl=processed.indexOf('\\n',a+1);var lim=(nl===-1)?processed.length:nl;var b=processed.indexOf('$',a+1);if(b===-1||b>=lim){pos=a+1;continue;}var m=processed.substring(a,b+1);var ph='%%MATH_'+mathStore.length+'%%';mathStore.push(m);processed=processed.substring(0,a)+ph+processed.substring(b+1);pos=a+ph.length;}
+            processed=extractMath(processed,'\\\\[','\\\\]',mathStore);
+            processed=extractMath(processed,'\\\\(','\\\\)',mathStore);
+            var raw=inst.parse(processed);
+            var safe=DOMPurify.sanitize(raw,{ADD_ATTR:['target']});
+            for(var i=0;i<mathStore.length;i++){safe=safe.split('%%MATH_'+i+'%%').join(mathStore[i]);}
+            document.querySelector('.content').innerHTML=safe;
+            runMathJax();
+        }
+
+        function runMathJax() {
+            var el=document.querySelector('.content');
+            if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetClear([el]);MathJax.typesetPromise([el]).catch(function(){});}
+            else if(window.MathJax&&MathJax.startup&&MathJax.startup.promise){MathJax.startup.promise.then(function(){MathJax.typesetClear([el]);MathJax.typesetPromise([el]).catch(function(){});});}
+        }
+        </script>
+
+        <body>
+        <div class="drag-bar">
+            <img class="logo" src="data:image/png;base64,\(iconB64)">
+            <span class="study-status"><span class="study-dot" id="statusDot"></span><span id="statusLabel">Study Mode</span></span>
+            <span class="drag-spacer"></span>
+            <div class="study-controls">
+                <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
+                <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
+                <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
+            </div>
+        </div>
+        <div class="response-area" id="responseArea"><div class="content"></div></div>
+        <div class="prompt-area">
+            <input class="prompt-field" id="promptInput"
+                   type="text" placeholder="Ask Presto anything\u{2026}"
+                   autocomplete="off" autofocus>
+        </div>
+        <script>
         document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
-            if (e.target.closest('.study-controls') || e.target.closest('.logo')) return;
+            if (e.target.closest('.study-controls') || e.target.closest('.collapse-btn') || e.target.closest('.logo')) return;
             e.preventDefault();
             window.webkit.messageHandlers.overlay.postMessage({action:'dragStart', x: e.screenX, y: e.screenY});
             function onUp() {
@@ -1236,6 +1675,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 e.preventDefault();
                 var text = input.value.trim();
                 if (text) {
+                    input.disabled = true;
+                    input.value = 'Thinking\\u2026';
                     window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt: text});
                 }
             }
@@ -1243,6 +1684,81 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         setTimeout(function() { input.focus(); }, 50);
         setTheme(\(isDarkMode));
         </script>
+        </body></html>
+        """
+    }
+
+    // MARK: - Study Suggestion HTML
+
+    private func suggestionHTML(text: String) -> String {
+        let escaped = text
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
+        <!DOCTYPE html><html>
+        \(sharedHead(extraStyle: """
+        body { display: flex; flex-direction: column; height: 100vh; }
+        .suggestion-body { flex: 1; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+        .suggestion-header { display: flex; align-items: center; justify-content: space-between; }
+        .suggestion-title { font-size: 13px; font-weight: 600; color: var(--text); }
+        .suggestion-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px; padding: 2px 4px; }
+        .suggestion-close:hover { color: var(--text); }
+        .suggestion-text { font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+        .suggestion-actions { display: flex; gap: 8px; align-items: center; }
+        .btn-accept {
+            background: var(--subtle-bg); border: 1px solid var(--subtle-border);
+            border-radius: 6px; color: var(--text); font-size: 12px; font-weight: 500;
+            padding: 5px 14px; cursor: pointer; font-family: -apple-system, sans-serif;
+            transition: background 0.15s;
+        }
+        .btn-accept:hover { background: var(--subtle-border); }
+        .btn-dismiss {
+            background: none; border: none; color: var(--text-dim); font-size: 12px;
+            cursor: pointer; font-family: -apple-system, sans-serif; padding: 5px 8px;
+        }
+        .btn-dismiss:hover { color: var(--text); }
+        """))
+        <body>
+        <div class="suggestion-body">
+            <div class="suggestion-header">
+                <span class="suggestion-title">Presto</span>
+                <button class="suggestion-close" onclick="dismiss()">&times;</button>
+            </div>
+            <div class="suggestion-text">\(escaped)</div>
+            <div class="suggestion-actions">
+                <button class="btn-accept" onclick="accept()">Yes, help me</button>
+                <button class="btn-dismiss" onclick="dismiss()">Dismiss</button>
+            </div>
+        </div>
+        <script>
+        function accept() { window.webkit.messageHandlers.overlay.postMessage({action:'suggestionAccept'}); }
+        function dismiss() { window.webkit.messageHandlers.overlay.postMessage({action:'suggestionDismiss'}); }
+        setTheme(\(isDarkMode));
+        </script>
+        </body></html>
+        """
+    }
+
+    // MARK: - Study Summary HTML
+
+    private func summaryHTML(text: String) -> String {
+        let escaped = text
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
+        <!DOCTYPE html><html>
+        \(sharedHead(extraStyle: """
+        body { display: flex; align-items: center; justify-content: center; height: 100vh; }
+        .summary { display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+        .check { font-size: 15px; color: var(--text-dim); }
+        .summary-text { font-size: 13px; color: var(--text-dim); }
+        """))
+        <body>
+        <div class="summary">
+            <span class="check">&#10003;</span>
+            <span class="summary-text">\(escaped)</span>
+        </div>
+        <script>setTheme(\(isDarkMode));</script>
         </body></html>
         """
     }
