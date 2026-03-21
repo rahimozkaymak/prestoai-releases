@@ -68,13 +68,9 @@ class APIService {
     let baseURL: String
     
     private init() {
-        #if DEBUG
         self.baseURL = UserDefaults.standard.string(forKey: "apiBaseURL")
-            ?? "http://127.0.0.1:8000"
+            ?? "https://prestoai-backend-production.up.railway.app"
         print("[API] Base URL: \(self.baseURL)")
-        #else
-        self.baseURL = "https://prestoai-backend-production.up.railway.app"
-        #endif
     }
     
     // MARK: - Token access (single source: AppStateManager)
