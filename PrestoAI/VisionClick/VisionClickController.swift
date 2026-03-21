@@ -7,11 +7,11 @@ class VisionClickController {
     private var windowFrame: CGRect = .zero  // Window frame in screen coordinates (top-left origin, points)
 
     /// The full two-pass vision click flow.
-    func executeCommand(_ command: String, overlayManager: OverlayManager?, completion: @escaping (Bool, String) -> Void) {
-        print("[VisionClick] Command: \(command)")
+    func executeCommand(_ command: String, targetApp: NSRunningApplication, overlayManager: OverlayManager?, completion: @escaping (Bool, String) -> Void) {
+        print("[VisionClick] Command: \(command), target: \(targetApp.localizedName ?? "?")")
 
-        // Step 1: Capture frontmost window (overlay should already be dismissed)
-        guard let capture = captureFrontmostWindow() else {
+        // Step 1: Capture the target app's window
+        guard let capture = captureWindow(for: targetApp) else {
             completion(false, "Could not capture the frontmost window.")
             return
         }
@@ -123,9 +123,8 @@ class VisionClickController {
 
     // MARK: - Window Capture
 
-    private func captureFrontmostWindow() -> (image: NSImage, windowFrame: CGRect)? {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
-        let pid = frontApp.processIdentifier
+    private func captureWindow(for app: NSRunningApplication) -> (image: NSImage, windowFrame: CGRect)? {
+        let pid = app.processIdentifier
 
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return nil

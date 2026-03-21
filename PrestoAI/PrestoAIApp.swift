@@ -547,7 +547,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Vision Click (Cmd+Shift+D)
 
     private func performVisionClick() {
-        // Show quick prompt overlay with vision click placeholder
+        // Capture the target app BEFORE showing overlay (which activates Presto AI)
+        guard let targetApp = NSWorkspace.shared.frontmostApplication else { return }
+        print("[VisionClick] Target app: \(targetApp.localizedName ?? "?") (PID \(targetApp.processIdentifier))")
+
         overlayManager?.onPromptSubmit = { [weak self] command in
             guard let self = self else { return }
 
@@ -556,13 +559,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Wait for overlay dismiss animation, then execute
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                self.visionClickController.executeCommand(command, overlayManager: self.overlayManager) { [weak self] success, message in
+                self.visionClickController.executeCommand(command, targetApp: targetApp, overlayManager: self.overlayManager) { [weak self] success, message in
                     DispatchQueue.main.async {
-                        if success {
-                            self?.overlayManager?.showError(message)  // brief success message
-                        } else {
-                            self?.overlayManager?.showError(message)
-                        }
+                        self?.overlayManager?.showError(message)
                     }
                 }
             }
