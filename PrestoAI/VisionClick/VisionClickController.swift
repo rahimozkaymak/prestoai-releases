@@ -10,9 +10,9 @@ class VisionClickController {
     func executeCommand(_ command: String, targetApp: NSRunningApplication, overlayManager: OverlayManager?, completion: @escaping (Bool, String) -> Void) {
         print("[VisionClick] Command: \(command), target: \(targetApp.localizedName ?? "?")")
 
-        // Step 1: Capture the target app's window
-        guard let capture = captureWindow(for: targetApp) else {
-            completion(false, "Could not capture the frontmost window.")
+        // Step 1: Capture the full screen
+        guard let capture = captureFullScreen() else {
+            completion(false, "Could not capture the screen. Check Screen Recording permission in System Settings.")
             return
         }
 
@@ -32,14 +32,19 @@ class VisionClickController {
 
         // Step 4: First API call — coarse pass
         let coarsePrompt = """
-        You are a screen interaction assistant. The user wants to interact with an element on screen.
-        The screenshot has a coordinate grid overlaid. Columns are labeled A, B, C... across the top.
-        Rows are labeled 1, 2, 3... down the left side.
-        Identify the UI element the user is referring to and respond with ONLY the grid cell where the CENTER
-        of that element is located, in the format: CELL:G4
-        If you cannot identify the element, respond with: NOTFOUND:reason
+        IMPORTANT: You are in GRID CLICK MODE. The screenshot has a coordinate grid overlaid.
+        Columns are labeled A, B, C... across the top. Rows are labeled 1, 2, 3... down the left side.
 
-        User command: \(command)
+        The user wants to: \(command)
+
+        Find the UI element on screen and respond with ONLY the grid cell where its CENTER is.
+        Your ENTIRE response must be exactly in this format, nothing else:
+        CELL:G4
+
+        If you truly cannot find it, respond with exactly:
+        NOTFOUND:brief reason
+
+        Do NOT explain anything. Just output CELL:XX or NOTFOUND:reason.
         """
 
         callClaudeWithImage(base64Image: griddedBase64, prompt: coarsePrompt) { [weak self] coarseResponse in
@@ -73,12 +78,19 @@ class VisionClickController {
 
             // Step 6: Second API call — fine pass
             let finePrompt = """
-            You are a precision click assistant. This is a zoomed-in view of a UI element.
+            IMPORTANT: You are in PRECISION CLICK MODE. This is a zoomed-in view of a UI element.
             The image has a fine coordinate grid. Columns are labeled 1-20 across the top.
             Rows are labeled 1-20 down the left side.
-            Identify the exact CENTER of the clickable element and respond with ONLY the grid cell
-            in the format: CELL:12,8 (column,row)
-            If the element is not visible in this zoomed view, respond with: NOTFOUND:reason
+
+            Find the exact CENTER of the clickable element and respond with ONLY the grid coordinates.
+            Your ENTIRE response must be exactly in this format, nothing else:
+            CELL:12,8
+
+            (That means column,row — both are numbers.)
+            If the element is not visible, respond with exactly:
+            NOTFOUND:brief reason
+
+            Do NOT explain anything. Just output CELL:col,row or NOTFOUND:reason.
             """
 
             self.callClaudeWithImage(base64Image: zoomedBase64, prompt: finePrompt) { fineResponse in
@@ -123,50 +135,42 @@ class VisionClickController {
 
     // MARK: - Window Capture
 
-    private func captureWindow(for app: NSRunningApplication) -> (image: NSImage, windowFrame: CGRect)? {
-        let pid = app.processIdentifier
-
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    private func captureFullScreen() -> (image: NSImage, windowFrame: CGRect)? {
+        // Screen Recording permission is required
+        if !CGPreflightScreenCaptureAccess() {
+            print("[VisionClick] Screen Recording permission not granted — requesting")
+            CGRequestScreenCaptureAccess()
             return nil
         }
 
-        for info in windowList {
-            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t,
-                  ownerPID == pid,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let windowID = info[kCGWindowNumber as String] as? CGWindowID else { continue }
+        guard let screen = NSScreen.main else { return nil }
+        let screenFrame = screen.frame
 
-            let bounds = CGRect(
-                x: boundsDict["X"] ?? 0, y: boundsDict["Y"] ?? 0,
-                width: boundsDict["Width"] ?? 0, height: boundsDict["Height"] ?? 0
-            )
-            guard bounds.width > 50 && bounds.height > 50 else { continue }
+        // Capture the entire screen (no -i flag = non-interactive, no -l = full screen)
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("presto_vc_\(UUID().uuidString).png")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", tempURL.path]  // full screen, no sound
 
-            // Use screencapture CLI for compatibility (CGWindowListCreateImage is unavailable in newer SDKs)
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("presto_vc_\(UUID().uuidString).png")
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            process.arguments = ["-l\(windowID)", "-x", tempURL.path]
+        do {
+            try process.run()
+            process.waitUntilExit()
 
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                guard process.terminationStatus == 0,
-                      let nsImage = NSImage(contentsOf: tempURL) else {
-                    try? FileManager.default.removeItem(at: tempURL)
-                    continue
-                }
-
+            guard process.terminationStatus == 0,
+                  let nsImage = NSImage(contentsOf: tempURL) else {
                 try? FileManager.default.removeItem(at: tempURL)
-                return (nsImage, bounds)
-            } catch {
-                print("[VisionClick] screencapture error: \(error)")
-                continue
+                return nil
             }
+
+            try? FileManager.default.removeItem(at: tempURL)
+            // Screen frame for coordinate mapping: origin (0,0), full screen size
+            let captureFrame = CGRect(x: 0, y: 0, width: screenFrame.width, height: screenFrame.height)
+            print("[VisionClick] Captured full screen: \(Int(nsImage.size.width))x\(Int(nsImage.size.height))")
+            return (nsImage, captureFrame)
+        } catch {
+            print("[VisionClick] screencapture error: \(error)")
+            return nil
         }
-        return nil
     }
 
     // MARK: - Claude API Call
