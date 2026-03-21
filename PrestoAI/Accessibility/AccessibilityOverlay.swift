@@ -9,20 +9,19 @@ final class AccessibilityOverlay {
 
     // MARK: - Capture frontmost window
 
-    /// Captures the frontmost window. Uses ScreenCaptureKit on macOS 14+, falls back to screencapture CLI.
-    static func captureFrontmostWindow() async -> (image: NSImage, windowFrame: CGRect)? {
+    /// Captures the specified app's frontmost window. Uses ScreenCaptureKit on macOS 14+, falls back to screencapture CLI.
+    static func captureFrontmostWindow(for app: NSRunningApplication) async -> (image: NSImage, windowFrame: CGRect)? {
         if #available(macOS 14.0, *) {
-            return await captureFrontmostWindowSCK()
+            return await captureFrontmostWindowSCK(for: app)
         } else {
-            return await captureFrontmostWindowCLI()
+            return await captureFrontmostWindowCLI(for: app)
         }
     }
 
     // MARK: - ScreenCaptureKit path (macOS 14+)
 
     @available(macOS 14.0, *)
-    private static func captureFrontmostWindowSCK() async -> (image: NSImage, windowFrame: CGRect)? {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+    private static func captureFrontmostWindowSCK(for frontApp: NSRunningApplication) async -> (image: NSImage, windowFrame: CGRect)? {
 
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -50,8 +49,7 @@ final class AccessibilityOverlay {
 
     // MARK: - CLI fallback (macOS 12-13)
 
-    private static func captureFrontmostWindowCLI() async -> (image: NSImage, windowFrame: CGRect)? {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+    private static func captureFrontmostWindowCLI(for frontApp: NSRunningApplication) async -> (image: NSImage, windowFrame: CGRect)? {
 
         // Get window info to find the window ID and bounds
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {

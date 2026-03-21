@@ -29,18 +29,23 @@ final class AccessibilityScanner {
 
     // MARK: - Public scan
 
-    /// Scans the frontmost app's accessibility tree on a background queue.
-    /// Returns scanned elements and the AXUIElement map (for execution).
-    static func scan(completion: @escaping ([ScannedElement], [Int: AXUIElement]) -> Void) {
+    /// Scans the given app's accessibility tree on a background queue.
+    /// The app must be captured before any UI activation (e.g. showing loading overlay).
+    static func scan(app: NSRunningApplication, completion: @escaping ([ScannedElement], [Int: AXUIElement]) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let app = NSWorkspace.shared.frontmostApplication else {
-                DispatchQueue.main.async { completion([], [:]) }
-                return
-            }
-
             let pid = app.processIdentifier
             let appName = app.localizedName ?? "Unknown"
             let axApp = AXUIElementCreateApplication(pid)
+
+            // Debug: check if we can read any attribute from the app element
+            var roleRef: CFTypeRef?
+            let roleResult = AXUIElementCopyAttributeValue(axApp, kAXRoleAttribute as CFString, &roleRef)
+            print("[AccessibilityScanner] App AXRole query result: \(roleResult.rawValue) (0=success), role=\(roleRef as? String ?? "nil")")
+
+            var childrenRef: CFTypeRef?
+            let childResult = AXUIElementCopyAttributeValue(axApp, kAXChildrenAttribute as CFString, &childrenRef)
+            let childCount = (childrenRef as? [AXUIElement])?.count ?? 0
+            print("[AccessibilityScanner] App children query result: \(childResult.rawValue), count=\(childCount)")
 
             var elements: [ScannedElement] = []
             var elementMap: [Int: AXUIElement] = [:]
@@ -50,6 +55,7 @@ final class AccessibilityScanner {
             walk(element: axApp, appName: appName, depth: 0, deadline: deadline,
                  index: &index, elements: &elements, elementMap: &elementMap)
 
+            print("[AccessibilityScanner] Scan complete: \(elements.count) elements found")
             DispatchQueue.main.async { completion(elements, elementMap) }
         }
     }

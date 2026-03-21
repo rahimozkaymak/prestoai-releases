@@ -554,10 +554,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // IMPORTANT: Capture the target app BEFORE showing loading overlay,
+        // because showLoading() activates Presto AI and changes frontmostApplication.
+        guard let targetApp = NSWorkspace.shared.frontmostApplication else {
+            overlayManager?.showError("No frontmost application detected.")
+            return
+        }
+        print("[AccessibilityScan] Target app: \(targetApp.localizedName ?? "?") (PID \(targetApp.processIdentifier))")
+
         overlayManager?.showLoading()
 
         // Run scan on background queue, then capture + composite on completion
-        AccessibilityScanner.scan { [weak self] elements, elementMap in
+        AccessibilityScanner.scan(app: targetApp) { [weak self] elements, elementMap in
             guard let self = self else { return }
 
             self.accessibilityExecutor.update(map: elementMap)
@@ -568,11 +576,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 print("  \(el.summaryLine)")
             }
 
-            // Capture the frontmost window and composite badges
+            // Capture the target window and composite badges
             Task {
-                guard let capture = await AccessibilityOverlay.captureFrontmostWindow() else {
+                guard let capture = await AccessibilityOverlay.captureFrontmostWindow(for: targetApp) else {
                     await MainActor.run {
-                        // Fallback: show element list without screenshot
                         self.showAccessibilityScanTextOnly(elements: elements)
                     }
                     return
