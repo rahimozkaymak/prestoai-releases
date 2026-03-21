@@ -113,29 +113,105 @@ class VisionClickController {
                     cropOrigin: zoom.cropOrigin
                 )
 
-                // NSImage coordinates are already in screen points (not retina pixels)
-                // so no scaling needed — just offset by capture origin
                 let screenX = self.windowFrame.origin.x + preciseImagePoint.x
                 let screenY = self.windowFrame.origin.y + preciseImagePoint.y
                 let screenPoint = CGPoint(x: screenX, y: screenY)
 
-                print("[VisionClick] Clicking at screen point: (\(Int(screenX)), \(Int(screenY)))")
+                print("[VisionClick] Initial target: (\(Int(screenX)), \(Int(screenY)))")
 
-                // Step 8: Highlight and click
+                // Step 8: Verification loop — move cursor, screenshot, ask Claude to confirm
+                self.verifyAndClick(at: screenPoint, command: command, attempt: 1, completion: completion)
+            }
+        }
+    }
+
+    // MARK: - Verification Loop
+
+    private func verifyAndClick(at point: CGPoint, command: String, attempt: Int, completion: @escaping (Bool, String) -> Void) {
+        let maxAttempts = 3
+
+        // Move cursor to target (no click yet)
+        let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                           mouseCursorPosition: point, mouseButton: .left)
+        move?.post(tap: .cghidEventTap)
+
+        // Wait for cursor to settle, then screenshot with cursor visible
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self else { return }
+
+            // Capture screen WITH cursor visible
+            guard let verifyCapture = self.captureFullScreen(showCursor: true),
+                  let verifyBase64 = self.imageToBase64JPEG(verifyCapture.image) else {
+                // Can't verify — just click where we are
                 DispatchQueue.main.async {
-                    ClickExecutor.click(at: screenPoint, highlight: true, highlightDuration: 0.4)
+                    ClickExecutor.click(at: point, highlight: true, highlightDuration: 0.3)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        completion(true, "Clicked at (\(Int(point.x)), \(Int(point.y)))")
+                    }
+                }
+                return
+            }
 
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        completion(true, "Clicked at (\(Int(screenX)), \(Int(screenY)))")
+            let verifyPrompt = """
+            CURSOR VERIFICATION: The mouse cursor is now visible on screen.
+            The user wanted to: \(command)
+
+            Is the cursor positioned on or very close to the correct element?
+
+            If YES (cursor is on or touching the target): respond exactly CONFIRM
+            If NO (cursor is NOT on the target): respond exactly ADJUST:dx,dy
+            where dx is pixels to move right (negative=left) and dy is pixels to move down (negative=up).
+            Estimate the adjustment needed to reach the CENTER of the target element.
+
+            Examples: ADJUST:50,-20 means move 50px right and 20px up.
+            Do NOT explain. Just CONFIRM or ADJUST:dx,dy.
+            """
+
+            self.callClaudeWithImage(base64Image: verifyBase64, prompt: verifyPrompt) { response in
+                print("[VisionClick] Verify attempt \(attempt): \(response)")
+
+                let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if trimmed.uppercased().contains("CONFIRM") {
+                    // Cursor is on target — click!
+                    DispatchQueue.main.async {
+                        ClickExecutor.click(at: point, highlight: true, highlightDuration: 0.3)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            completion(true, "Clicked at (\(Int(point.x)), \(Int(point.y)))")
+                        }
+                    }
+                } else if let adjustment = self.parseAdjustment(trimmed), attempt < maxAttempts {
+                    // Adjust and retry
+                    let newPoint = CGPoint(x: point.x + adjustment.dx, y: point.y + adjustment.dy)
+                    print("[VisionClick] Adjusting by (\(adjustment.dx), \(adjustment.dy)) → (\(Int(newPoint.x)), \(Int(newPoint.y)))")
+                    self.verifyAndClick(at: newPoint, command: command, attempt: attempt + 1, completion: completion)
+                } else {
+                    // Max attempts or can't parse — click where we are
+                    DispatchQueue.main.async {
+                        ClickExecutor.click(at: point, highlight: true, highlightDuration: 0.3)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            completion(true, "Clicked at (\(Int(point.x)), \(Int(point.y))) after \(attempt) attempts")
+                        }
                     }
                 }
             }
         }
     }
 
-    // MARK: - Window Capture
+    /// Parse "ADJUST:50,-20" → (dx: 50, dy: -20)
+    private func parseAdjustment(_ response: String) -> (dx: CGFloat, dy: CGFloat)? {
+        guard let range = response.range(of: "ADJUST:", options: .caseInsensitive) else { return nil }
+        let coordStr = String(response[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = coordStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count >= 2,
+              let dx = Double(parts[0]),
+              let dy = Double(parts[1]) else { return nil }
+        return (CGFloat(dx), CGFloat(dy))
+    }
 
-    private func captureFullScreen() -> (image: NSImage, windowFrame: CGRect)? {
+    // MARK: - Screen Capture
+
+    private func captureFullScreen(showCursor: Bool = false) -> (image: NSImage, windowFrame: CGRect)? {
         // Screen Recording permission is required
         if !CGPreflightScreenCaptureAccess() {
             print("[VisionClick] Screen Recording permission not granted — requesting")
@@ -150,7 +226,11 @@ class VisionClickController {
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("presto_vc_\(UUID().uuidString).png")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-x", tempURL.path]  // full screen, no sound
+        // -C = capture cursor, -x = no sound
+        var args = ["-x"]
+        if showCursor { args.append("-C") }
+        args.append(tempURL.path)
+        process.arguments = args
 
         do {
             try process.run()
