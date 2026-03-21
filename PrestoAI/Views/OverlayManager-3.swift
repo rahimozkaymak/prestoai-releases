@@ -207,85 +207,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         }
     }
 
-    // MARK: - Accessibility Scan Results
-
-    /// Last accessibility scan data (image + element list) for follow-up API calls
-    private(set) var lastAccessibilityScanBase64: String?
-    private(set) var lastAccessibilityScanElements: [ScannedElement] = []
-
-    /// Display the annotated screenshot and element list from an accessibility scan.
-    func showAccessibilityScan(imageBase64: String, elements: [ScannedElement]) {
-        lastAccessibilityScanBase64 = imageBase64
-        lastAccessibilityScanElements = elements
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.ensureWindow()
-            self.webView?.loadHTMLString(self.accessibilityScanHTML(imageBase64: imageBase64, elements: elements), baseURL: nil)
-            self.present()
-        }
-    }
-
-    private func accessibilityScanHTML(imageBase64: String, elements: [ScannedElement]) -> String {
-        let elementRows = elements.map { el -> String in
-            let escaped = el.summaryLine
-                .replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-            let enabledClass = el.isEnabled ? "" : " disabled"
-            return "<div class=\"el-row\(enabledClass)\">\(escaped)</div>"
-        }.joined(separator: "\n")
-
-        return """
-        <!DOCTYPE html>
-        <html>
-        \(sharedHead(extraStyle: """
-        .scan-img {
-            width: 100%;
-            border-radius: 6px;
-            margin-bottom: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        }
-        .scan-title {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: var(--text);
-        }
-        .scan-count {
-            font-size: 11px;
-            color: var(--loading-text);
-            margin-bottom: 8px;
-        }
-        .el-list {
-            font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
-            font-size: 11px;
-            line-height: 1.5;
-        }
-        .el-row {
-            padding: 2px 0;
-            border-bottom: 1px solid var(--subtle-border);
-        }
-        .el-row.disabled {
-            opacity: 0.5;
-        }
-        """))
-        <body>
-        \(headerHTML())
-        <div class="content-area">
-            <div class="scan-title">Accessibility Scan</div>
-            <img class="scan-img" src="data:image/png;base64,\(imageBase64)">
-            <div class="scan-count">\(elements.count) interactive elements found</div>
-            <div class="el-list">
-            \(elementRows)
-            </div>
-        </div>
-        \(bottomBarHTML())
-        \(gripJS())
-        </body>
-        </html>
-        """
-    }
-
     /// Callback for Study Mode pause/resume toggle
     var onStudyPauseToggle: (() -> Void)?
     /// Callback for Study Mode stop
@@ -403,7 +324,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private let studyBarCompactHeight: CGFloat = 100
     private let studyBarExpandedHeight: CGFloat = 420
 
-    func showPromptInput(studyMode: Bool = false) {
+    func showPromptInput(studyMode: Bool = false, placeholder: String? = nil) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isPromptMode = true
@@ -413,7 +334,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 self.webView?.loadHTMLString(self.studyModeBarHTML(), baseURL: nil)
             } else {
                 self.ensurePromptWindow()
-                self.webView?.loadHTMLString(self.promptInputHTML(), baseURL: nil)
+                self.webView?.loadHTMLString(self.promptInputHTML(placeholder: placeholder), baseURL: nil)
             }
             self.presentPrompt()
         }
@@ -1321,8 +1242,9 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         """
     }
 
-    private func promptInputHTML() -> String {
-        """
+    private func promptInputHTML(placeholder: String? = nil) -> String {
+        let placeholderText = placeholder ?? "Ask anything about this screenshot…"
+        return """
         <!DOCTYPE html><html>
         \(sharedHead(extraStyle: """
         .prompt-area {
@@ -1353,7 +1275,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         </div>
         <div class="prompt-area">
             <input class="prompt-field" id="promptInput"
-                   type="text" placeholder="Ask anything about this screenshot…"
+                   type="text" placeholder="\(placeholderText)"
                    autocomplete="off" autofocus>
         </div>
         <script>

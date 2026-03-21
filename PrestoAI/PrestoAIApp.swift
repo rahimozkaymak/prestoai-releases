@@ -55,8 +55,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Study Mode controllers
     private var studyOnboardingController: StudyOnboardingController?
 
-    // Accessibility scan
-    private let accessibilityExecutor = AccessibilityExecutor()
+    // Vision Click controller
+    private let visionClickController = VisionClickController()
 
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
@@ -292,8 +292,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.toggleStudyMode()
         }
         hotkeys.onAccessibilityScan = { [weak self] in
-            print("[Presto.AI] Hotkey triggered accessibility scan")
-            self?.performAccessibilityScan()
+            print("[Presto.AI] Hotkey triggered vision click")
+            self?.performVisionClick()
         }
         hotkeys.registerCapture()
         hotkeys.registerQuickPrompt()
@@ -544,67 +544,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
-    // MARK: - Accessibility Scan (Cmd+Shift+D)
+    // MARK: - Vision Click (Cmd+Shift+D)
 
-    private func performAccessibilityScan() {
-        // Check accessibility trust, prompting if needed
-        if !AccessibilityScanner.isTrusted(prompt: true) {
-            print("[Presto.AI] Accessibility permission not granted — prompting user")
-            overlayManager?.showError("Accessibility permission required. Grant access in System Settings → Privacy & Security → Accessibility, then press Cmd+Shift+D again.")
-            return
-        }
-
-        // IMPORTANT: Capture the target app BEFORE showing loading overlay,
-        // because showLoading() activates Presto AI and changes frontmostApplication.
-        guard let targetApp = NSWorkspace.shared.frontmostApplication else {
-            overlayManager?.showError("No frontmost application detected.")
-            return
-        }
-        print("[AccessibilityScan] Target app: \(targetApp.localizedName ?? "?") (PID \(targetApp.processIdentifier))")
-
-        overlayManager?.showLoading()
-
-        // Run scan on background queue, then capture + composite on completion
-        AccessibilityScanner.scan(app: targetApp) { [weak self] elements, elementMap in
+    private func performVisionClick() {
+        // Show quick prompt overlay with vision click placeholder
+        overlayManager?.onPromptSubmit = { [weak self] command in
             guard let self = self else { return }
 
-            self.accessibilityExecutor.update(map: elementMap)
+            // Dismiss overlay BEFORE capturing screenshot so it's not in the image
+            self.overlayManager?.dismiss()
 
-            // Print element list to console for debugging
-            print("[AccessibilityScan] Found \(elements.count) interactive elements:")
-            for el in elements {
-                print("  \(el.summaryLine)")
-            }
-
-            // Capture the target window and composite badges
-            Task {
-                guard let capture = await AccessibilityOverlay.captureFrontmostWindow(for: targetApp) else {
-                    await MainActor.run {
-                        self.showAccessibilityScanTextOnly(elements: elements)
+            // Wait for overlay dismiss animation, then execute
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                self.visionClickController.executeCommand(command, overlayManager: self.overlayManager) { [weak self] success, message in
+                    DispatchQueue.main.async {
+                        if success {
+                            self?.overlayManager?.showError(message)  // brief success message
+                        } else {
+                            self?.overlayManager?.showError(message)
+                        }
                     }
-                    return
-                }
-
-                guard let composited = AccessibilityOverlay.compositeBadges(
-                    on: capture.image, windowFrame: capture.windowFrame, elements: elements
-                ) else {
-                    await MainActor.run {
-                        self.showAccessibilityScanTextOnly(elements: elements)
-                    }
-                    return
-                }
-
-                await MainActor.run {
-                    self.overlayManager?.showAccessibilityScan(imageBase64: composited.base64PNG, elements: elements)
                 }
             }
         }
-    }
-
-    /// Fallback when screenshot capture fails — show just the element list
-    private func showAccessibilityScanTextOnly(elements: [ScannedElement]) {
-        let lines = elements.map { $0.summaryLine }.joined(separator: "\n")
-        overlayManager?.showError("Accessibility scan found \(elements.count) elements (screenshot unavailable):\n\n\(lines)")
+        overlayManager?.showPromptInput(placeholder: "What should I click?")
     }
 
     private func quickPromptCapture() {
