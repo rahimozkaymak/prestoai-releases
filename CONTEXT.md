@@ -19,13 +19,16 @@ macOS menu bar app that captures screenshots, sends them to Claude API for analy
 ### 1. Screenshot Analysis (Cmd+Shift+X)
 User presses hotkey → interactive region capture → image compressed (1024px max, JPEG 80%) → POST /api/analyze (SSE stream) → response displayed in floating WKWebView overlay with frosted glass styling. ESC dismisses.
 
-### 2. VisionClick — AI-Driven Mouse Control (Cmd+Shift+D)
+### 2. Quick Prompt (Cmd+Shift+Z)
+User presses hotkey → interactive region capture (same as Cmd+Shift+X) → instead of auto-analyzing, shows a text prompt input overlay → user types a specific question about the screenshot → screenshot + custom prompt sent to Claude → streamed response displayed. Useful when the user wants to ask something specific rather than get a generic analysis.
+
+### 3. VisionClick — AI-Driven Mouse Control (Cmd+Shift+D)
 User presses hotkey → prompt overlay asks "What should I click?" → full screen captured → screenshot + command sent to Claude → Claude returns `CLICK:x,y` pixel coordinates → cursor moves to target → verification loop (screenshot with cursor visible, Claude confirms or adjusts, up to 3 attempts) → CGEvent click executed. Coordinates are scaled from compressed image space back to screen space.
 
-### 3. Study Mode (Cmd+Shift+S) — In Progress
+### 4. Study Mode (Cmd+Shift+S) — In Progress
 Proactive screen-aware assistant. When toggled on, periodically captures screen, sends to Claude for context analysis, surfaces suggestions in corner notifications. Persistent prompt box stays on screen. Paid-only feature. Privacy-first: screenshots never written to disk, discarded after API response.
 
-### 4. AutoSolve / Automation — In Progress
+### 5. AutoSolve / Automation — In Progress
 Automated task execution using VisionClick. AppSkills define known app interactions. AutomationController orchestrates multi-step workflows. AutomationStatusBar shows progress.
 
 ---
