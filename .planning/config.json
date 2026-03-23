@@ -1,0 +1,10 @@
+{
+  "project_name": "Presto AI",
+  "milestone": "v1.2",
+  "created": "2026-03-15",
+  "workflow": {
+    "research": true,
+    "verify": true,
+    "auto_commit": false
+  }
+}

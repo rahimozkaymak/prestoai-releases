@@ -189,6 +189,8 @@ class APIService {
     // MARK: - Core Analyze (streaming)
 
     func sendScreenshot(_ base64Image: String, prompt: String? = nil,
+                        model: String? = nil,
+                        skipCompression: Bool = false,
                         onChunk: @escaping (String) -> Void,
                         onComplete: @escaping (Int, String) -> Void,
                         onError: @escaping (Error) -> Void = { _ in }) {
@@ -197,15 +199,20 @@ class APIService {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let (compressed, mediaType) = ImageCompressor.compress(base64Image)
-            
+            let (compressed, mediaType) = skipCompression
+                ? (base64Image, "image/jpeg")
+                : ImageCompressor.compress(base64Image)
+
             let deviceID = AppStateManager.shared.deviceID
-            let bodyDict: [String: Any] = [
+            var bodyDict: [String: Any] = [
                 "image": compressed,
                 "prompt": p,
                 "media_type": mediaType,
                 "device_id": deviceID
             ]
+            if let model = model {
+                bodyDict["model"] = model
+            }
 
             guard let body = try? JSONSerialization.data(withJSONObject: bodyDict),
                   let url = URL(string: self.baseURL + "/api/analyze") else {
@@ -485,6 +492,63 @@ class APIService {
         return data
     }
     
+    // MARK: - Auto-Solve
+
+    struct AutoSolveAnswer {
+        let questionText: String
+        let answerText: String
+        let yPositionPercent: Double  // 0.0 = top, 1.0 = bottom
+    }
+
+    struct AutoSolveResponse {
+        let isHomework: Bool
+        let subject: String?
+        let promptText: String?
+        let answers: [AutoSolveAnswer]
+    }
+
+    func analyzeAutoSolve(image: String, mediaType: String, mode: String,
+                          sessionId: String, deviceId: String) async throws -> AutoSolveResponse {
+        let body: [String: Any] = [
+            "image": image,
+            "media_type": mediaType,
+            "mode": mode,
+            "session_id": sessionId,
+            "device_id": deviceId
+        ]
+
+        let data = try await post(endpoint: "/api/v1/study/auto-solve", body: body)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid auto-solve response")
+        }
+
+        let isHomework = json["is_homework"] as? Bool ?? false
+        let subject = json["subject"] as? String
+        let promptText = json["prompt_text"] as? String
+
+        var answers: [AutoSolveAnswer] = []
+        if let answersArray = json["answers"] as? [[String: Any]] {
+            for item in answersArray {
+                guard let questionText = item["question_text"] as? String,
+                      let answerText = item["answer_text"] as? String,
+                      let yPos = item["y_position_percent"] as? Double else { continue }
+                answers.append(AutoSolveAnswer(
+                    questionText: questionText,
+                    answerText: answerText,
+                    yPositionPercent: yPos
+                ))
+            }
+        }
+
+        return AutoSolveResponse(
+            isHomework: isHomework,
+            subject: subject,
+            promptText: promptText,
+            answers: answers
+        )
+    }
+
     private func handleResponse(_ response: URLResponse, data: Data? = nil) throws {
         guard let httpResponse = response as? HTTPURLResponse else { return }
         
@@ -536,14 +600,14 @@ enum ImageCompressor {
             return (base64, "image/png")
         }
         
-        // Resize to fit within 1024px on longest side, JPEG at 80% quality
-        if let result = resizeAndEncode(nsImage, maxSide: 1024, quality: 0.80) {
+        // Resize to fit within 1568px on longest side, JPEG at 80% quality
+        if let result = resizeAndEncode(nsImage, maxSide: 1568, quality: 0.80) {
             print("[Image] Compressed: \(base64.count) → \(result.count) chars")
             return (result, "image/jpeg")
         }
 
-        // Fallback: resize to PNG at 1024px instead of sending original full-size
-        if let pngResult = resizeAndEncodePNG(nsImage, maxSide: 1024) {
+        // Fallback: resize to PNG at 1568px instead of sending original full-size
+        if let pngResult = resizeAndEncodePNG(nsImage, maxSide: 1568) {
             print("[Image] JPEG failed, using resized PNG: \(base64.count) → \(pngResult.count) chars")
             return (pngResult, "image/png")
         }

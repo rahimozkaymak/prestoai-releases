@@ -229,6 +229,7 @@ let state = {
   selectedUserDetail: null,
   promos: [],
   loading: false,
+  syncing: false,
   lastRefresh: null,
   loginError: null,
   loginLoading: false,
@@ -284,6 +285,22 @@ async function loadAll() {
     if (e instanceof TypeError) state.loadError = 'CORS error — add https://get-prestoai.com to ALLOWED_ORIGINS on Railway';
   }
   state.loading = false; render();
+}
+
+async function syncPolar() {
+  if (!state.token) return;
+  state.syncing = true; render();
+  try {
+    const res = await authFetch('/api/admin/sync-polar', { method: 'POST' });
+    if (res) {
+      console.log(`Polar sync: ${res.synced} users synced from ${res.polar_subscriptions} subscriptions`);
+      await loadAll();
+    }
+  } catch (e) {
+    console.error('Polar sync failed:', e);
+    alert('Polar sync failed: ' + (e.message || 'Unknown error'));
+  }
+  state.syncing = false; render();
 }
 
 async function loadUserDetail(id) {
@@ -706,7 +723,7 @@ function renderSystem() {
   return `
     ${section('Backend Health', '<div id="health-status">Checking...</div>')}
     ${section('Configuration', `<div class="mono" style="font-size:12px;color:var(--text2);line-height:2">
-      ${[['Backend',API],['Model','claude-haiku-4-5-20251001'],['Max Tokens','2048'],['Free Queries','5/device (lifetime)'],['Paid Limit','50/day (200 admin)'],['Referral','3 friends = 30 days'],['Price','$5.99/mo early bird'],['Payments','Polar'],['Hosting','Railway + PostgreSQL']].map(([k,v])=>`${k}: <span style="color:var(--white)">${v}</span>`).join('<br>')}
+      ${[['Backend',API],['Model','claude-haiku-4-5-20251001'],['Max Tokens','2048'],['Free Queries','5/device (lifetime)'],['Paid Limit','50/day (1000 admin)'],['Referral','3 friends = 30 days'],['Price','$5.99/mo early bird'],['Payments','Polar'],['Hosting','Railway + PostgreSQL']].map(([k,v])=>`${k}: <span style="color:var(--white)">${v}</span>`).join('<br>')}
     </div>`)}
     ${section('Backend TODOs', `<div class="mono" style="font-size:11px;color:var(--text3);line-height:2.2">
       ${['GET /api/admin/stats → add device funnel counts','GET /api/admin/devices → paginated device list','GET /api/admin/referrals → aggregated referral stats','GET /api/download → redirect + log (new downloads table)','POST /api/events → website analytics (new events table)','payments table → store Polar webhook amounts','POST /api/auth/reset-password'].map(t=>`<div style="border-bottom:1px solid #141416;padding:3px 0"><span style="color:var(--yellow);margin-right:8px">TODO</span>${t}</div>`).join('')}
@@ -777,6 +794,7 @@ function render() {
       <div class="main">
         <div class="main-header">
           <h2>${pageTitle}</h2>
+          <button class="btn-refresh" onclick="syncPolar()" ${state.syncing?'disabled':''}>${state.syncing?'Syncing...':'Sync Polar'}</button>
           <button class="btn-refresh" onclick="loadAll()" ${state.loading?'disabled':''}>${state.loading?'...':'Refresh'}</button>
         </div>
         <div class="fade-in">${pageContent}</div>

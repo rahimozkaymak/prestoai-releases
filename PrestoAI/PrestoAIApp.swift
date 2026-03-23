@@ -57,6 +57,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Vision Click controller
     private let visionClickController = VisionClickController()
+    private var automationController: AutomationController?
 
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
@@ -285,7 +286,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.quickPromptCapture()
         }
         hotkeys.onEsc = { [weak self] in
-            self?.overlayManager?.dismiss()
+            if let auto = self?.automationController, auto.isRunning {
+                auto.cancel()
+            } else {
+                self?.overlayManager?.dismiss()
+            }
         }
         hotkeys.onStudyModeToggle = { [weak self] in
             print("[Presto.AI] Hotkey triggered Study Mode toggle")
@@ -302,6 +307,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Wire Study Mode callbacks
         setupStudyModeCallbacks()
+        setupAutoSolveCallbacks()
     }
 
     // MARK: - Study Mode
@@ -325,13 +331,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         studyMode.onSuggestionAccepted = { [weak self] followUpPrompt in
-            // Route through existing answer pipeline
-            Task {
-                guard let screenshot = await self?.captureForStudyMode() else { return }
-                await MainActor.run {
-                    self?.sendWithPrompt(screenshot: screenshot, prompt: followUpPrompt)
-                }
-            }
+            // Inject prompt into study bar and submit as if the user typed it
+            self?.overlayManager?.injectPromptAndSubmit(followUpPrompt)
         }
 
         studyMode.onSessionEnded = { [weak self] summary in
@@ -479,8 +480,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.settingsPanel = panel
     }
     
+    // MARK: - Auto-Solve
+
+    private func setupAutoSolveCallbacks() {
+        AutoSolveManager.shared.onDeactivated = { [weak self] in
+            self?.overlayManager?.updateAutoSolveButton(active: false)
+        }
+
+        overlayManager?.onAutoSolveToggle = { [weak self] in
+            self?.toggleAutoSolve()
+        }
+    }
+
+    private func toggleAutoSolve() {
+        let stateManager = AppStateManager.shared
+
+        if stateManager.isOffline {
+            overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+            return
+        }
+
+        let autoSolve = AutoSolveManager.shared
+
+        if autoSolve.isActive {
+            autoSolve.deactivate()
+        } else {
+            if stateManager.currentState != .paid {
+                showPaywall()
+                return
+            }
+            autoSolve.activate()
+        }
+    }
+
     // MARK: - Actions
-    
+
     @objc private func captureScreenshot() {
         let stateManager = AppStateManager.shared
 
@@ -557,16 +591,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Dismiss overlay BEFORE capturing screenshot so it's not in the image
             self.overlayManager?.dismiss()
 
-            // Wait for overlay dismiss animation, then execute
+            // Wait for overlay dismiss animation, then route through AutomationController
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                self.visionClickController.executeCommand(command, targetApp: targetApp, overlayManager: self.overlayManager) { [weak self] success, message in
-                    DispatchQueue.main.async {
-                        self?.overlayManager?.showError(message)
-                    }
+                let controller = AutomationController()
+                self.automationController = controller
+
+                controller.handleCommand(command, targetApp: targetApp, overlayManager: self.overlayManager) { [weak self] in
+                    self?.automationController = nil
                 }
             }
         }
-        overlayManager?.showPromptInput(placeholder: "What should I click?")
+        overlayManager?.showPromptInput(placeholder: "What should I do?")
     }
 
     private func quickPromptCapture() {

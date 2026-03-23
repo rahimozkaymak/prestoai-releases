@@ -214,6 +214,30 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Callback for suggestion accept / dismiss
     var onSuggestionAccept: (() -> Void)?
     var onSuggestionDismiss: (() -> Void)?
+    var onAutoSolveToggle: (() -> Void)?
+
+    func updateAutoSolveButton(active: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("if(typeof setAutoSolveState==='function')setAutoSolveState(\(active))", completionHandler: nil)
+        }
+    }
+
+    func injectPromptAndSubmit(_ text: String) {
+        let escaped = text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("""
+                var input = document.getElementById('promptInput');
+                if (input) {
+                    input.disabled = true;
+                    input.value = 'Thinking\\u2026';
+                    window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt:'\(escaped)'});
+                }
+            """, completionHandler: nil)
+        }
+    }
     /// Whether currently showing Study Mode prompt
     private var isStudyMode = false
 
@@ -446,6 +470,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         case "suggestionDismiss":
             dismissPopup()
             onSuggestionDismiss?()
+        case "autoSolveToggle":
+            onAutoSolveToggle?()
         default: break
         }
     }
@@ -1346,6 +1372,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             transition: background 0.15s, color 0.15s;
         }
         .study-btn:hover { background: var(--subtle-border); color: var(--text); }
+        .study-btn.active { background: rgba(52,199,89,0.15); border-color: rgba(52,199,89,0.3); color: #34c759; }
         .study-status {
             font-size: 11px; color: var(--loading-text); margin-left: 2px;
         }
@@ -1464,6 +1491,17 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         function stopStudy() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
         }
+        function toggleAutoSolve() {
+            var btn = document.getElementById('autoSolveBtn');
+            var isOn = btn.classList.toggle('active');
+            btn.textContent = isOn ? 'Auto-Solve ●' : 'Auto-Solve';
+            window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveToggle'});
+        }
+        function setAutoSolveState(on) {
+            var btn = document.getElementById('autoSolveBtn');
+            if (on) { btn.classList.add('active'); btn.textContent = 'Auto-Solve ●'; }
+            else { btn.classList.remove('active'); btn.textContent = 'Auto-Solve'; }
+        }
         function collapseResponse() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyCollapse'});
         }
@@ -1570,6 +1608,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             <span class="drag-spacer"></span>
             <div class="study-controls">
                 <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
+                <button class="study-btn" id="autoSolveBtn" onclick="toggleAutoSolve()">Auto-Solve</button>
                 <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
                 <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
             </div>

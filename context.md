@@ -1,239 +1,152 @@
-# Presto AI — Project Context
+# Presto AI — Project Context (March 2026)
 
-## Overview
-macOS menu bar app: capture a screenshot region → AI analysis → floating overlay response. No dock icon, menu bar only.
+## What Is Presto AI
 
-**Hotkeys:** `Cmd+Shift+X` (capture), `ESC` (dismiss overlay)
-**Domain:** `get-prestoai.com`
-**Backend:** Railway (`https://prestoai-backend-production.up.railway.app`)
-**Payments:** Polar (polar.sh) — NOT LemonSqueezy
+macOS menu bar app that captures screenshots, sends them to Claude API for analysis, and displays AI responses in a floating overlay. No dock icon — menu bar only. Built with Swift/SwiftUI, backend is Python/FastAPI on Railway.
+
+- **Bundle ID:** `ai.presto.PrestoAI`
+- **Domain:** `get-prestoai.com`
+- **Backend:** `https://prestoai-backend-production.up.railway.app`
+- **Payments:** Polar (polar.sh)
+- **AI Model:** Claude Haiku 4.5 (`claude-haiku-4-5-20251001`), max 2048 tokens
+- **Distribution:** DMG via GitHub Releases (`rahimozkaymak/prestoai-releases`)
+- **Source Code:** `rahimozkaymak/prestoai` (private)
+
+---
+
+## Core Features
+
+### 1. Screenshot Analysis (Cmd+Shift+X)
+User presses hotkey → interactive region capture → image compressed (1024px max, JPEG 80%) → POST /api/analyze (SSE stream) → response displayed in floating WKWebView overlay with frosted glass styling. ESC dismisses.
+
+### 2. VisionClick — AI-Driven Mouse Control (Cmd+Shift+D)
+User presses hotkey → prompt overlay asks "What should I click?" → full screen captured → screenshot + command sent to Claude → Claude returns `CLICK:x,y` pixel coordinates → cursor moves to target → verification loop (screenshot with cursor visible, Claude confirms or adjusts, up to 3 attempts) → CGEvent click executed. Coordinates are scaled from compressed image space back to screen space.
+
+### 3. Study Mode (Cmd+Shift+S) — In Progress
+Proactive screen-aware assistant. When toggled on, periodically captures screen, sends to Claude for context analysis, surfaces suggestions in corner notifications. Persistent prompt box stays on screen. Paid-only feature. Privacy-first: screenshots never written to disk, discarded after API response.
+
+### 4. AutoSolve / Automation — In Progress
+Automated task execution using VisionClick. AppSkills define known app interactions. AutomationController orchestrates multi-step workflows. AutomationStatusBar shows progress.
 
 ---
 
 ## Architecture
 
-### Client (macOS App — Swift/SwiftUI)
-- **Location:** `/Volumes/T7/PrestoAI/PrestoAI/`
-- Xcode project: `PrestoAI.xcodeproj`
-- Menu bar app (`.accessory` activation policy), dark theme (`#0A0A0A`)
+### Swift Client (`/Volumes/T7/PrestoAI/PrestoAI/`)
 
-### Backend (Python/FastAPI)
-- **Location:** `/Volumes/T7/PrestoAI/Presto backend/main.py`
-- Single-file FastAPI app, SQLAlchemy ORM, v1.2.0
-- AI model: `claude-haiku-4-5-20251001`, max 2048 tokens
-- Production: PostgreSQL (Railway), Dev: SQLite
-
-### Website (Static)
-- **Location:** `/Volumes/T7/PrestoAI/prestowebsite/`
-- Hosted on Cloudflare Pages at `get-prestoai.com`
-- Pages: `index.html`, `join.html` (referral landing), `success.html` (post-checkout)
-- **Deploy:** `CLOUDFLARE_API_TOKEN=hFwCOMNPr4k2oHQ5Hh0ds9lUi8YZeIWT_cZCGoUL wrangler pages deploy /Volumes/T7/PrestoAI/prestowebsite --project-name=prestoai-website`
-- **DMG Release:** GitHub Releases on `rahimozkaymak/prestoai-releases` — download buttons link to latest release
-
----
-
-## Key Files
-
-### Swift Client
 | File | Purpose |
 |------|---------|
-| `PrestoAIApp.swift` | `@main` entry, AppDelegate, menu bar, hotkey wiring, auth flow |
-| `Views/AppStateManager.swift` | Single source of truth: auth state, device ID, JWT tokens (Keychain) |
-| `Services/APIService.swift` | HTTP calls, SSE streaming, image compression (1024px max, JPEG 80%) |
-| `Services/HotkeyService.swift` | Global hotkey registration (Carbon) |
-| `Services/ScreenCaptureService.swift` | Interactive screenshot capture |
-| `Views/OverlayManager-3.swift` | Floating overlay: loading, streaming response, error display |
-| `Views/PaywallView.swift` | Dual-card paywall (free + referral / paid) |
-| `Views/SetupWizardView.swift` | First-launch wizard (600×520pt), screen recording permission |
-| `Views/SettingsView.swift` | Settings panel (420×410pt), tabbed |
-| `Services/AuthViews.swift` | Upgrade prompt, account creation/login, checkout polling |
-| `Utils/KeychainHelper.swift` | Keychain read/write/delete (service: `ai.presto.app`) |
+| **PrestoAIApp.swift** | @main entry, AppDelegate, menu bar, hotkey wiring, auth flow |
+| **Views/AppStateManager.swift** | Auth state machine, device ID, JWT tokens (Keychain) |
+| **Services/APIService.swift** | HTTP calls, SSE streaming, image compression |
+| **Services/HotkeyService.swift** | Global hotkey registration (Carbon API) |
+| **Services/ScreenCaptureService.swift** | Interactive screenshot capture |
+| **Services/StudyModeManager.swift** | Study Mode capture pipeline and session management |
+| **Services/AutoSolveManager.swift** | Auto-solve orchestration |
+| **Views/OverlayManager-3.swift** | Floating WKWebView overlay: loading, streaming, errors |
+| **Views/PaywallView.swift** | Dual-card paywall (subscribe + referral) |
+| **Views/SetupWizardView.swift** | First-launch onboarding wizard |
+| **Views/SettingsView.swift** | Settings panel, tabbed |
+| **Views/StudyModeViews.swift** | Study Mode UI components |
+| **Views/CornerStatusBox.swift** | Corner status indicator |
+| **Views/Theme.swift** | App theme/colors |
+| **Services/AuthViews.swift** | Account creation/login, checkout polling |
+| **Services/LaunchAtLoginManager.swift** | Launch at login toggle |
+| **Utils/KeychainHelper.swift** | Keychain CRUD (service: `ai.presto.app`) |
+| **VisionClick/VisionClickController.swift** | VisionClick main orchestrator |
+| **VisionClick/ClickExecutor.swift** | CGEvent click + highlight circle |
+| **VisionClick/AppSkills.swift** | Known app interaction definitions |
+| **VisionClick/AutomationController.swift** | Multi-step automation orchestrator |
+| **VisionClick/AutomationStatusBar.swift** | Automation progress UI |
+| **VisionClick/GridOverlay.swift** | Coordinate grid overlay (legacy, kept for reference) |
+| **VisionClick/ZoomCrop.swift** | Crop/zoom utilities (legacy, kept for reference) |
+
+### Backend (Python/FastAPI — separate repo)
+- **Repo:** `rahimozkaymak/prestoai-backend` → auto-deploys to Railway
+- Single-file: `main.py` (~1060 lines)
+- PostgreSQL (prod) / SQLite (dev)
+- SQLAlchemy ORM, no Alembic (uses `create_all()`)
+
+### Website (Static — separate directory)
+- **Location:** `/Volumes/T7/PrestoAI/prestowebsite/`
+- Cloudflare Pages at `get-prestoai.com`
+- Pages: index.html, join.html (referral landing), success.html (post-checkout)
 
 ---
 
-## App States (`AppState` enum)
+## App States
+
 | State | Condition | Can Analyze |
 |-------|-----------|-------------|
 | `.anonymous` | No device ID yet | No |
 | `.freeActive` | Device has queries remaining (1–5) | Yes |
-| `.freeExhausted` | 5 device queries used, no paid/referral | No |
+| `.freeExhausted` | 5 device queries used | No |
 | `.referralActive` | Referral reward active (30 days) | Yes |
-| `.paid` | Valid JWT + active subscription | Yes (50/day; 200 for admins) |
-
-State initialized on launch: JWT validity → fallback to device status. Backend is source of truth.
+| `.paid` | Valid JWT + active subscription | Yes (50/day; 200 admin) |
 
 ---
 
 ## Monetization
 
-### Free Tier
-- 5 lifetime queries per device (tracked by UUID in Keychain)
-- No account needed
-
-### Paid (Polar)
-- Monthly subscription via Polar hosted checkout
-- Early bird: $5.99/mo, post-launch: $10.99/mo (sync with `app_config.monthly_price_display`)
-
-### Referral System (Device-Based)
-1. User exhausts free queries → paywall shown
-2. Clicks "Copy Link" → creates `PRESTO-XXXXXX` code (6 alphanumeric chars)
-3. Friend enters code in onboarding → claimed
-4. Friend completes 1 analysis → auto-qualified
-5. After 3 qualified friends → 30 days free for referrer
-- Constants: `REFERRAL_QUALIFIED_NEEDED = 3`, reward = 30 days
-
-### Promo Codes
-- Admin-generated, grant free days
-- Validated: `prefix` (A-Z0-9, max 10 chars), `free_days` (1–365), `max_uses` (1–10000)
+- **Free tier:** 5 lifetime queries per device (UUID in Keychain), no account needed
+- **Paid:** Monthly subscription via Polar checkout ($5.99/mo early bird, $10.99/mo post-launch)
+- **Referral system:** Copy referral link (PRESTO-XXXXXX) → 3 friends complete an analysis → 30 days free for referrer
+- **Promo codes:** Admin-generated, grant free days
+- **Study Mode:** Paid-only feature, primary upgrade driver
 
 ---
 
-## Payment Flow
-```
-1. User taps "Subscribe" → AccountViewController (email/password)
-2. After registration → JWT saved → GET /api/billing/checkout-url
-3. Polar checkout opens in browser
-4. CheckoutStatusView polls GET /api/auth/status every 3s (5 min timeout)
-5. Polar webhook fires → backend sets subscription_status="active"
-6. Poll returns state="paid" → AppState = .paid
-```
+## Backend API (Key Endpoints)
 
----
-
-## Data Flow: Screenshot Analysis
-```
-1. Cmd+Shift+X → AppStateManager.canAnalyze check
-2. ScreenCaptureService.captureInteractive() → base64 PNG
-3. ImageCompressor.compress() → 1024px max, JPEG 80%
-4. POST /api/analyze (SSE stream)
-5. SSEStreamDelegate.onChunk → overlayManager.appendChunk()
-6. [DONE] → onComplete(queriesRemaining, state) → update AppStateManager
-```
-
----
-
-## Backend API Endpoints
-
-### Auth
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/api/auth/register` | None | Register, returns tokens |
-| POST | `/api/auth/login` | None | Login, returns tokens |
-| POST | `/api/auth/refresh` | None | Token rotation |
-| GET | `/api/auth/status` | Bearer | Returns `{state, email}` |
-
-### Core
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/api/analyze` | Optional | Main SSE streaming endpoint |
-| POST | `/api/query` | Bearer | Legacy alias for /api/analyze |
-| GET | `/api/device/status` | None | Device query status |
-| GET | `/api/user/profile` | Bearer | Profile + referral info |
-
-### Billing (Polar)
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | `/api/billing/checkout-url` | Optional | Polar checkout URL |
-| POST | `/api/subscription/checkout` | Bearer | Checkout for logged-in user |
-| POST | `/api/webhooks/polar` | Signature | Polar webhook handler |
-
-### Referral
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | `/api/referral/paywall` | None | Paywall state for device |
-| POST | `/api/referral/code` | None | Create referral code |
-| POST | `/api/referral/claim` | None | Claim referral code |
-| GET | `/api/referral/status` | None | Referral progress |
-
-### Admin
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/admin/stats` | Dashboard stats |
-| GET | `/api/admin/users` | Paginated user list |
-| GET | `/api/admin/users/{id}` | User detail + usage |
-| POST | `/api/admin/set-premium` | Grant premium (1–3650 days) |
-| POST | `/api/admin/promo/create` | Generate promo codes |
-| POST | `/api/admin/promo/deactivate/{code}` | Deactivate promo |
-| GET | `/api/admin/promo/list` | List promos |
-| POST | `/api/admin/reset-device` | Reset device (testing) |
-| GET | `/health` | Health check |
+| POST | `/api/analyze` | Main SSE streaming analysis (JWT or device_id auth) |
+| POST | `/api/auth/register` | Register, returns JWT pair |
+| POST | `/api/auth/login` | Login, returns JWT pair |
+| GET | `/api/auth/status` | Subscription state check |
+| GET | `/api/device/status` | Free queries remaining |
+| GET | `/api/billing/checkout-url` | Polar checkout URL |
+| POST | `/api/webhooks/polar` | Polar webhook handler |
+| GET | `/api/referral/paywall` | Paywall state for device |
+| POST | `/api/referral/code` | Create referral code |
+| POST | `/api/referral/claim` | Claim referral code |
+| GET | `/api/admin/stats` | Admin dashboard |
+| POST | `/api/admin/set-premium` | Grant premium manually |
+| POST | `/api/v1/study/analyze` | Study Mode analysis (planned) |
 
 ---
 
-## Database Models (8 tables)
-- **User** — email, password_hash, referral_code, polar_customer_id, subscription_status/ends_at, query counters
-- **Device** — UUID (client-generated), queries_used, linked_user_id
-- **QueryLog** — per-query log: tokens, cost, response time, status
-- **PromoCode** / **PromoRedemption** — promo code management
-- **ReferralCode** — device-based referral codes (PRESTO-XXXXXX)
-- **ReferralClaim** — friend claims, qualified flag
-- **ReferralReward** — 30-day reward after 3 qualifications
-- **AppConfig** — runtime key-value config (monthly_price_display, free_device_queries, etc.)
+## Security
 
----
-
-## Auth Token Storage (Keychain)
-| Key | Purpose | Expiry |
-|-----|---------|--------|
-| `presto.device_id` | Anonymous device UUID | Permanent |
-| `presto.access_token` | JWT auth token | 24 hours |
-| `presto.refresh_token` | Refresh token | 30 days |
-
-Auto-refresh on 401: APIService retries once after refreshing token.
-
----
-
-## Environment Variables (Railway)
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `JWT_SECRET` | Yes | JWT signing (must be strong) |
-| `ANTHROPIC_API_KEY` | Yes | Claude API key |
-| `DATABASE_URL` | No | PostgreSQL (defaults to SQLite) |
-| `POLAR_ACCESS_TOKEN` | Yes | Polar API token |
-| `POLAR_PRODUCT_ID` | Yes | Polar product UUID |
-| `POLAR_WEBHOOK_SECRET` | Yes | Webhook signature verification |
-| `POLAR_SUCCESS_URL` | No | Post-checkout redirect |
-| `ADMIN_EMAILS` | No | Comma-separated admin emails |
-| `ALLOWED_ORIGINS` | No | CORS origins |
-
----
-
-## Security (Current State)
-- JWT HS256 with strong secret (rejects weak defaults)
-- Bcrypt password hashing
-- Password: min 8 chars, requires uppercase + lowercase + number
+- App Sandbox disabled (required for VisionClick accessibility/CGEvent)
+- JWT HS256 auth, bcrypt passwords
 - Polar webhook signature verification
-- Security headers: HSTS, X-Frame-Options, X-Content-Type-Options, XSS-Protection
-- CORS: restricted origins, methods (`GET, POST, OPTIONS`), headers
-- App sandboxed, HTTP only allowed to localhost (DEBUG)
-- Release builds: hardcoded backend URL (no UserDefaults override)
-- Device ID abuse: max 10 per IP/day (in-memory tracker)
-- Prompt snippets redacted in QueryLog
-- Generic error messages (no exception leakage to clients)
-- Checkout endpoint: uniform "Access denied" errors (no email enumeration)
+- Device abuse protection: max 10 device IDs per IP/day
+- Screenshots never persisted to disk or server
+- Release builds use hardcoded backend URL
 
 ---
 
-## SSE Response Format
-```
-data: {"delta": "text chunk", "queries_remaining": 3, "state": "free_active"}
-data: {"queries_remaining": 2, "state": "free_active"}   ← final state
-data: [DONE]
-```
+## UI Pattern
+
+All popups use **OverlayPanel + WKWebView** with frosted glass styling (NSVisualEffectView). Never use plain SwiftUI NSPanel. Dark theme (#0A0A0A). WKWebView ignores CSS drag regions — use local+global NSEvent monitors for window dragging instead.
 
 ---
 
-## Config Values
-| Setting | Value |
-|---------|-------|
-| Free device queries | 5 lifetime |
-| Paid daily limit | 50/day (200 admin) |
-| Referral reward | 30 days after 3 qualified |
-| Image max size | 1024px, JPEG 80% |
-| Claude model | claude-haiku-4-5-20251001 |
-| Max tokens | 2,048 |
-| Request timeout | 300s |
+## Deploy Commands
+
+- **Backend:** Push to `rahimozkaymak/prestoai-backend` main → Railway auto-deploys
+- **Website:** `CLOUDFLARE_API_TOKEN=<token> wrangler pages deploy /Volumes/T7/PrestoAI/prestowebsite --project-name=prestoai-website`
+- **DMG Release:** Build archive in Xcode → export → create DMG → upload to `rahimozkaymak/prestoai-releases` GitHub Releases
+- **Source code:** Push to `rahimozkaymak/prestoai` (private)
 
 ---
 
-*Last updated: March 9, 2026*
+## Known TODOs
+
+- Replace `create_all()` with Alembic migrations
+- Device IDs are client-generated (spoofable)
+- In-memory IP tracker resets on deploy (consider Redis)
+- Web referral landing page not yet built
+- Study Mode implementation in progress
+- AutoSolve/Automation system in progress

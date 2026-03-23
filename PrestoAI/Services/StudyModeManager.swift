@@ -112,6 +112,9 @@ class StudyModeManager: ObservableObject {
     private var lastNotificationTime: Date = .distantPast
     private var consecutiveDismissals: Int = 0
 
+    // Request guard
+    private var isRequestInFlight = false
+
     // Settings (from UserDefaults)
     var captureInterval: TimeInterval {
         let val = UserDefaults.standard.double(forKey: "studyModeCaptureInterval")
@@ -391,7 +394,8 @@ class StudyModeManager: ObservableObject {
     // MARK: - Analysis
 
     private func analyzeCapture(imageBase64: String, mediaType: String, appName: String, windowTitle: String) async {
-        guard let session = session else { return }
+        guard let session = session, !isRequestInFlight else { return }
+        isRequestInFlight = true
 
         let captureId = UUID().uuidString
         let clipboardText = await MainActor.run { NSPasteboard.general.string(forType: .string) ?? "" }
@@ -416,6 +420,7 @@ class StudyModeManager: ObservableObject {
 
         do {
             let suggestion = try await APIService.shared.analyzeStudyCapture(context: context)
+            isRequestInFlight = false
 
             if let suggestion = suggestion {
                 await MainActor.run {
@@ -423,6 +428,7 @@ class StudyModeManager: ObservableObject {
                 }
             }
         } catch {
+            isRequestInFlight = false
             print("[StudyMode] Analysis error: \(error.localizedDescription)")
         }
     }
