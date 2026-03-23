@@ -136,12 +136,25 @@ All popups use **OverlayPanel + WKWebView** with frosted glass styling (NSVisual
 
 ---
 
+## Git Remotes & Multi-Device Workflow
+
+| Remote | Repo | Purpose |
+|--------|------|---------|
+| `source` | `rahimozkaymak/prestoai` (private) | All Swift source code |
+| `origin` | `rahimozkaymak/prestoai-releases` | DMG release assets only — never push source here |
+
+**Before starting a session:** `git fetch source && git merge source/main` — pull in any changes made from other devices (Claude Code web, etc.)
+
+**After making changes:** Always commit and `git push source main`.
+
+---
+
 ## Deploy Commands
 
 - **Backend:** Push to `rahimozkaymak/prestoai-backend` main → Railway auto-deploys
 - **Website:** `CLOUDFLARE_API_TOKEN=<token> wrangler pages deploy /Volumes/T7/PrestoAI/prestowebsite --project-name=prestoai-website`
 - **DMG Release:** Build archive in Xcode → export → create DMG → upload to `rahimozkaymak/prestoai-releases` GitHub Releases
-- **Source code:** Push to `rahimozkaymak/prestoai` (private)
+- **Source code:** `git push source main`
 
 ---
 
