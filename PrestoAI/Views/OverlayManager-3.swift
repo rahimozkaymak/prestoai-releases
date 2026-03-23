@@ -6,7 +6,7 @@ class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSTextFieldDelegate {
     private var overlayWindow: OverlayPanel?
     private var webView: WKWebView?
     private var resizeMonitor: Any?
@@ -19,6 +19,10 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private var isPageReady = false
     private var chunkQueue: [String] = []
     private var isPromptMode = false
+    private var studyTextField: NSTextField?
+    private var studyPromptBg: NSView?      // styled background behind the text field
+    private var studyPromptContainer: NSView? // outer container matching body bg opacity
+    private let nativePromptHeight: CGFloat = 56
 
     // Follow-up conversation state
     private var conversationHistory: [(question: String, answer: String)] = []
@@ -98,7 +102,13 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func signalStreamEnd() {
         DispatchQueue.main.async { [weak self] in
-            self?.webView?.evaluateJavaScript("if(typeof finalize==='function')finalize()", completionHandler: nil)
+            guard let self = self else { return }
+            self.webView?.evaluateJavaScript("if(typeof finalize==='function')finalize()", completionHandler: nil)
+            if self.isStudyMode {
+                self.studyTextField?.stringValue = ""
+                self.studyTextField?.isEnabled = true
+                self.overlayWindow?.makeFirstResponder(self.studyTextField)
+            }
         }
     }
 
@@ -223,19 +233,26 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
 
     func injectPromptAndSubmit(_ text: String) {
-        let escaped = text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
         DispatchQueue.main.async { [weak self] in
-            self?.webView?.evaluateJavaScript("""
-                var input = document.getElementById('promptInput');
-                if (input) {
-                    input.disabled = true;
-                    input.value = 'Thinking\\u2026';
-                    window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt:'\(escaped)'});
-                }
-            """, completionHandler: nil)
+            guard let self = self else { return }
+            if self.isStudyMode, let field = self.studyTextField {
+                field.stringValue = "Thinking\u{2026}"
+                field.isEnabled = false
+                self.onPromptSubmit?(text)
+            } else {
+                let escaped = text
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "'", with: "\\'")
+                    .replacingOccurrences(of: "\n", with: "\\n")
+                self.webView?.evaluateJavaScript("""
+                    var input = document.getElementById('promptInput');
+                    if (input) {
+                        input.disabled = true;
+                        input.value = 'Thinking\\u2026';
+                        window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt:'\(escaped)'});
+                    }
+                """, completionHandler: nil)
+            }
         }
     }
     /// Whether currently showing Study Mode prompt
@@ -399,6 +416,10 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         window.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
         window.maxSize = NSSize(width: 9999, height: studyBarCompactHeight)
         webView?.evaluateJavaScript("hideResponseArea()", completionHandler: nil)
+        // Re-enable native prompt field
+        studyTextField?.stringValue = ""
+        studyTextField?.isEnabled = true
+        overlayWindow?.makeFirstResponder(studyTextField)
     }
 
     // FIX #6: Properly tear down webview to prevent retain cycle
@@ -427,6 +448,9 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             self.webView?.navigationDelegate = nil
             self.webView?.removeFromSuperview()
             self.webView = nil
+            self.studyTextField = nil
+            self.studyPromptBg = nil
+            self.studyPromptContainer = nil
             self.overlayWindow = nil
             self.isPageReady = false
             self.chunkQueue.removeAll()
@@ -588,6 +612,108 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         createWindow(frame: frame)
         overlayWindow?.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
         overlayWindow?.maxSize = NSSize(width: 9999, height: studyBarCompactHeight)
+
+        // Add native NSTextField for the prompt input — stays pinned during animation
+        guard let container = overlayWindow?.contentView else { return }
+
+        // WKWebView stays full-size (fills entire window) — its HTML body background
+        // provides uniform transparency. The native text field floats on top at the bottom.
+        // WKWebView already has autoresizingMask = [.width, .height] from createWindow().
+
+        // Prompt container pinned to bottom — .maxYMargin means top margin stretches
+        // No background — the WKWebView beneath provides the frosted glass look
+        let promptContainer = NSView(frame: NSRect(x: 0, y: 0, width: width, height: nativePromptHeight))
+        promptContainer.autoresizingMask = [.width, .maxYMargin]
+
+        // Styled background (matches CSS .prompt-field styling)
+        let bgHeight: CGFloat = 36
+        let bgY: CGFloat = (nativePromptHeight - bgHeight) / 2
+        let bgView = NSView(frame: NSRect(x: 12, y: bgY, width: width - 24, height: bgHeight))
+        bgView.wantsLayer = true
+        bgView.layer?.cornerRadius = 8
+        bgView.layer?.borderWidth = 1
+        bgView.autoresizingMask = [.width]
+
+        // Borderless text field inside the background, vertically centered
+        let fieldHeight: CGFloat = 20
+        let fieldY: CGFloat = (bgHeight - fieldHeight) / 2
+        let field = NSTextField(frame: NSRect(x: 12, y: fieldY, width: bgView.bounds.width - 24, height: fieldHeight))
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = NSFont.systemFont(ofSize: 13)
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.lineBreakMode = .byTruncatingTail
+        field.autoresizingMask = [.width]
+        field.delegate = self
+
+        bgView.addSubview(field)
+        promptContainer.addSubview(bgView)
+        container.addSubview(promptContainer)
+
+        self.studyTextField = field
+        self.studyPromptBg = bgView
+        self.studyPromptContainer = promptContainer
+        updatePromptFieldTheme()
+
+        // Focus the field after a brief delay (window needs to be key first)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.overlayWindow?.makeFirstResponder(self?.studyTextField)
+        }
+    }
+
+    private func updatePromptFieldTheme() {
+        guard let field = studyTextField, let bgView = studyPromptBg else { return }
+        let isDark = Theme.isDark(NSApp.effectiveAppearance)
+
+        field.textColor = isDark
+            ? NSColor(red: 0.94, green: 0.94, blue: 0.95, alpha: 1.0)
+            : NSColor(red: 0.10, green: 0.10, blue: 0.10, alpha: 1.0)
+
+        let placeholderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.4)
+            : NSColor(white: 0.0, alpha: 0.4)
+        field.placeholderAttributedString = NSAttributedString(
+            string: "Ask Presto anything\u{2026}",
+            attributes: [.foregroundColor: placeholderColor, .font: NSFont.systemFont(ofSize: 13)]
+        )
+
+        bgView.layer?.backgroundColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.08).cgColor
+            : NSColor(white: 0.0, alpha: 0.05).cgColor
+        bgView.layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.10).cgColor
+    }
+
+    // MARK: - NSTextFieldDelegate (native study mode prompt)
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            guard let field = control as? NSTextField else { return false }
+            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                field.stringValue = "Thinking\u{2026}"
+                field.isEnabled = false
+                onPromptSubmit?(text)
+            }
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        let isDark = Theme.isDark(NSApp.effectiveAppearance)
+        studyPromptBg?.layer?.borderColor = isDark
+            ? NSColor(red: 0.42, green: 0.71, blue: 1.0, alpha: 1.0).cgColor   // #6cb4ff
+            : NSColor(red: 0.0, green: 0.40, blue: 0.80, alpha: 1.0).cgColor    // #0066cc
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        let isDark = Theme.isDark(NSApp.effectiveAppearance)
+        studyPromptBg?.layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.10).cgColor
     }
 
     private func ensurePromptWindow() {
@@ -618,6 +744,9 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         HotkeyService.shared.registerEsc()
+        if isStudyMode {
+            window.makeFirstResponder(studyTextField)
+        }
     }
 
     // FIX #1: Activate the app so the overlay is reliably visible
@@ -722,6 +851,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             container.layer?.backgroundColor = Theme.nsOverlayBg(NSApp.effectiveAppearance).cgColor
             let isDark = Theme.isDark(NSApp.effectiveAppearance)
             self.webView?.evaluateJavaScript("if(typeof setTheme==='function')setTheme(\(isDark))", completionHandler: nil)
+            self.updatePromptFieldTheme()
         }
     }
 
@@ -1338,25 +1468,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         <!DOCTYPE html><html>
         \(sharedHead(extraStyle: """
         body { display: flex; flex-direction: column; height: 100vh; }
-        .prompt-area {
-            position: absolute; left: 0; right: 0; bottom: 0; height: 56px;
-            display: flex; align-items: center;
-            padding: 0 12px 10px 12px;
-        }
-        .prompt-field {
-            width: 100%;
-            background: var(--subtle-bg);
-            border: 1px solid var(--subtle-border);
-            border-radius: 8px;
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 13px;
-            padding: 8px 12px;
-            outline: none;
-            resize: none;
-        }
-        .prompt-field::placeholder { color: var(--loading-text); }
-        .prompt-field:focus { border-color: var(--link-color); }
         .study-controls {
             display: flex; align-items: center; gap: 6px; margin-left: auto;
         }
@@ -1520,10 +1631,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             document.querySelector('.content').innerHTML = '';
             rawMarkdown = '';
             smdParser = null;
-            var input = document.getElementById('promptInput');
-            input.value = '';
-            input.disabled = false;
-            input.focus();
         }
 
         function appendChunk(text) {
@@ -1550,11 +1657,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                     if (pendingFinalize) { pendingFinalize = false; runMathJax(); }
                 }, 5000);
             }
-            // Re-enable input
-            var input = document.getElementById('promptInput');
-            input.disabled = false;
-            input.value = '';
-            input.focus();
         }
 
         function doFinalize() {
@@ -1614,11 +1716,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             </div>
         </div>
         <div class="response-area" id="responseArea"><div class="content"></div></div>
-        <div class="prompt-area">
-            <input class="prompt-field" id="promptInput"
-                   type="text" placeholder="Ask Presto anything\u{2026}"
-                   autocomplete="off" autofocus>
-        </div>
         <script>
         document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
             if (e.target.closest('.study-controls') || e.target.closest('.collapse-btn') || e.target.closest('.logo')) return;
@@ -1630,19 +1727,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             }
             document.addEventListener('mouseup', onUp);
         });
-        var input = document.getElementById('promptInput');
-        input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                var text = input.value.trim();
-                if (text) {
-                    input.disabled = true;
-                    input.value = 'Thinking\\u2026';
-                    window.webkit.messageHandlers.overlay.postMessage({action:'promptSubmit', prompt: text});
-                }
-            }
-        });
-        setTimeout(function() { input.focus(); }, 50);
         setTheme(\(isDarkMode));
         </script>
         </body></html>
