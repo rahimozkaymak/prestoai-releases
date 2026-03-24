@@ -91,7 +91,10 @@ class AutoSolveManager {
             )
 
             guard isActive else { return }
-            print("[AutoSolve] Coordinator: found \(result.questions.count) questions")
+            print("[AutoSolve] Questions found: \(result.questions.count)")
+            for q in result.questions {
+                print("[AutoSolve] Q\(q.id): \(q.questionText.prefix(80))... bbox=\(q.bbox)")
+            }
 
             if result.questions.isEmpty { return }
 
@@ -102,6 +105,7 @@ class AutoSolveManager {
 
             let globalContext = result.globalContext
             for q in result.questions {
+                print("[AutoSolve] Launching solver for Q\(q.id)")
                 let task = Task { [weak self] in
                     guard let self = self else { return }
                     await self.solveQuestion(
@@ -135,7 +139,7 @@ class AutoSolveManager {
             )
 
             guard isActive else { return }
-            print("[AutoSolve] Solver \(id): answer ready")
+            print("[AutoSolve] Solver Q\(id) completed: latex=\(result.answerLatex.prefix(50))")
 
             await MainActor.run { [weak self] in
                 guard let self = self, self.isActive else { return }
@@ -143,7 +147,7 @@ class AutoSolveManager {
                                 answerCopyable: result.answerCopyable, bbox: bbox)
             }
         } catch {
-            print("[AutoSolve] Solver \(id) failed: \(error.localizedDescription)")
+            print("[AutoSolve] Solver Q\(id) FAILED: \(error)")
         }
     }
 
@@ -191,10 +195,12 @@ class AutoSolveManager {
             }
         }
 
+        let bubbleFrame = NSRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
+        print("[AutoSolve] Bubble Q\(id) created at frame=\(bubbleFrame)")
         let bubble = AnswerBubbleWindow(
             answerLatex: answerLatex,
             answerCopyable: answerCopyable,
-            initialFrame: NSRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
+            initialFrame: bubbleFrame
         )
         bubble.show()
         bubbles[id] = bubble
