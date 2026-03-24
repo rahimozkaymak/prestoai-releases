@@ -22,24 +22,39 @@ Major rewrite that merges `StudyModeManager` and `AutoSolveManager` into a singl
 - `PrestoAI/Services/StudyCoordinator.swift` — merged brain (~550 lines, single flat class with MARK sections)
 
 ### Modified
-- `PrestoAI/Views/OverlayManager-3.swift` — add auto-solve result methods, add `aLbeta` button to study bar HTML
-- `PrestoAI/PrestoAIApp.swift` — replace all `StudyModeManager.shared` + `AutoSolveManager.shared` calls with `StudyCoordinator.shared`
-- `Presto backend/main.py` — fix 500 error, update `AutoSolveRequest` model, update solve system prompt
+- `PrestoAI/Services/APIService.swift` — add `isMultipleChoice: Bool` to `SolveResult`; parse `is_multiple_choice` from solve response JSON
+- `PrestoAI/Views/OverlayManager-3.swift` — add auto-solve result methods + `#autosolve-panel` div to study bar HTML; add `aLbeta` button
+- `PrestoAI/PrestoAIApp.swift` — replace all `StudyModeManager.shared` + `AutoSolveManager.shared` calls with `StudyCoordinator.shared`; remove `$currentSuggestion` Combine sink (coordinator calls OverlayManager directly); update `sessionDurationText` binding
+- `Presto backend/main.py` — add traceback print to 500 handler; update solve system prompt; confirm `AutoSolveRequest` fields
 
 ---
 
 ## Section 1: StudyCoordinator
 
-Single `class StudyCoordinator` with `static let shared` singleton. No sub-objects; all logic in one file with clearly delimited `// MARK:` sections.
+Single `class StudyCoordinator: ObservableObject` with `static let shared` singleton. No sub-objects; all logic in one file with clearly delimited `// MARK:` sections.
 
-### State Properties
+### Published State (consumed by PrestoAIApp)
+
+```swift
+@Published private(set) var isActive = false
+@Published private(set) var isPaused = false
+@Published private(set) var sessionDurationText: String = ""
+```
+
+`currentSuggestion` is **not** published. Instead, the coordinator calls `OverlayManager.showStudySuggestion()` directly when a suggestion is ready — eliminating the existing `$currentSuggestion.sink` Combine chain in `PrestoAIApp`. The existing `onSuggestionAccept` / `onSuggestionDismiss` callbacks on `OverlayManager` remain and are wired to `StudyCoordinator`'s accept/dismiss handlers.
+
+### Private State Properties
 
 ```swift
 // Session
-private(set) var isActive = false
-private(set) var isPaused = false
 private var session: StudySession?          // stats for backend reporting
 private var sessionMemory: SessionMemory?   // questions + solved set
+
+// Capture decision (inlined — no separate CaptureDecision struct)
+private var lastCaptureTime: Date = .distantPast
+private var lastWindowTitle: String = ""
+private var lastAppName: String = ""
+private var userIsActivelyTyping = false
 
 // Modes
 private var autoSolveActive = false
@@ -54,11 +69,14 @@ private var appObserver: NSObjectProtocol?
 private var isRequestInFlight = false
 private var lastNotificationTime: Date = .distantPast
 private var consecutiveDismissals = 0
+private var isPrivateAppDetected = false
 
 // Auto solve
 private var solverTasks: [Task<Void, Never>] = []
 private var solversInFlight = 0
 ```
+
+`CaptureDecision` is **not** a separate struct — its four fields (`lastCaptureTime`, `lastWindowTitle`, `lastAppName`, `userIsActivelyTyping`) and its `shouldCapture` logic are inlined directly as private state + a private method on `StudyCoordinator`. The logic itself is preserved identically: capture on window/app change, capture on timer if `> interval` has elapsed, suppress if `userIsActivelyTyping`.
 
 ### Supporting Types
 
@@ -85,6 +103,8 @@ struct StudySession {
     var questionsAsked: Int = 0
     var appsVisited: Set<String> = []
     var recentWindowTitles: [String] = []
+    // Note: previousSuggestions is intentionally removed — the question memory
+    // system (SessionMemory.solvedQuestions) supersedes it as the anti-redundancy signal.
 }
 ```
 
@@ -93,32 +113,38 @@ struct StudySession {
 ### Public API
 
 ```swift
-func startSession()
+func startSession()                          // generates sessionId internally; handles onboarding gate
+func activateAfterOnboarding()               // sets hasShownOnboarding = true, then calls startSession()
 func endSession()
 func pause()
 func resume()
 func toggleAutoSolve()
+func resolveQuestion(id: Int)                // re-solve a single question; called by OverlayManager on autoSolveResolve message
 func handleUserAcceptedSuggestion(questionId: Int)
+func dismissCurrentSuggestion()             // increments consecutiveDismissals; wired to overlayManager.onSuggestionDismiss
 func recordQuestionAsked()
 func buildSessionContextPrompt() -> String?
 ```
+
+**`activateAfterOnboarding()`** replaces the two `StudyModeManager.shared.activateAfterOnboarding()` callsites in `PrestoAIApp` (lines 350 and 356). It sets `UserDefaults "studyModeOnboardingShown" = true` then calls `startSession()`.
 
 ### Callbacks (out to PrestoAIApp)
 
 ```swift
 var onNeedsOnboarding: (() -> Void)?
 var onSessionEnded: ((String) -> Void)?       // summary string
-var onSuggestionAccepted: ((String) -> Void)? // followUpPrompt
-var onSuggestionDismiss: (() -> Void)?
+var onSuggestionAccepted: ((String) -> Void)? // followUpPrompt → injectPromptAndSubmit
 ```
+
+`onSuggestionDismiss` is handled internally (increments `consecutiveDismissals`); no external callback needed.
 
 ---
 
 ## Section 2: Session Lifecycle
 
 ### `startSession()`
-1. Guard paid state; call `onNeedsOnboarding?()` if first time (same onboarding gate as today)
-2. Create `StudySession` + empty `SessionMemory`; set `isActive = true`
+1. Guard paid state; call `onNeedsOnboarding?()` if `!hasShownOnboarding`; return
+2. Create `StudySession(id: UUID().uuidString, startedAt: Date())` + empty `SessionMemory`; set `isActive = true`
 3. Start OS monitors: app-switch observer, typing detection key monitor, capture timer (45s default), duration timer (30s)
 4. After 3s delay: capture screen → POST `stage: "identify"` → store `globalContext` + `questions` in `sessionMemory`, set `currentPageSignature`
 5. If `!autoSolveActive`: start suggestion timer (20s repeating)
@@ -140,21 +166,22 @@ Runs only when `!autoSolveActive`. Timer fires every 20 seconds.
 
 **Each cycle:**
 1. Capture screen silently
-2. Compute page fingerprint from OCR text (reuse `frameSimilarity` pixel-sampling approach)
-3. If page changed → re-POST `stage: "identify"` to refresh memory; reset solved set
+2. Compute page fingerprint via pixel-sampling (`frameSimilarity` approach from `AutoSolveManager`)
+3. If page changed → re-POST `stage: "identify"` to refresh memory; reset `solvedQuestions`
 4. Call `sessionMemory.nextUnsolvedQuestion()`
-5. If `nil` → skip cycle (all solved or no questions)
-6. Respect anti-spam: `consecutiveDismissals >= 3` → effective interval 120s
-7. Show popup: `OverlayManager.showStudySuggestion("Want to solve Q\(id)? \(summary)")` — existing accept/dismiss mechanism
-8. On accept → `handleUserAcceptedSuggestion(questionId:)`
-9. On dismiss → `consecutiveDismissals += 1`
+5. If `nil` → skip cycle (all solved or no questions found)
+6. Respect anti-spam: `consecutiveDismissals >= 3` → effective interval 120s; `Date().timeIntervalSince(lastNotificationTime) < effectiveInterval` → skip
+7. Set `overlayManager.onSuggestionAccept = { [weak self] in self?.handleUserAcceptedSuggestion(questionId: id) }` — captures `id` for the pending question
+8. Call `overlayManager.showStudySuggestion("Want to solve Q\(id)? \(summary)")` directly (no Combine publish)
+9. When user accepts: `onSuggestionAccept` fires → `handleUserAcceptedSuggestion(questionId:)`. When user dismisses: `onSuggestionDismiss` fires → `dismissCurrentSuggestion()` → `consecutiveDismissals += 1`
 
 **`handleUserAcceptedSuggestion(questionId:)`:**
 1. Get question from `sessionMemory`
 2. POST `stage: "solve"` with question text + global context + hint
-3. Display answer in study bar via `onSuggestionAccepted?(followUpPrompt)` callback
-4. `sessionMemory.markSolved(id)`
-5. Log: `[Coordinator] Q\(id) solved and marked in memory`
+3. Format as `followUpPrompt` string: `"Q\(id): \(questionText)\n\nAnswer: \(result.answerLatex)"`
+4. Call `onSuggestionAccepted?(followUpPrompt)` → `PrestoAIApp` calls `overlayManager.injectPromptAndSubmit(followUpPrompt)` — same path as today
+5. `sessionMemory.markSolved(id)`; `session?.suggestionsAccepted += 1`; `consecutiveDismissals = 0`
+6. Log: `[Coordinator] Q\(id) solved and marked in memory`
 
 ---
 
@@ -162,18 +189,44 @@ Runs only when `!autoSolveActive`. Timer fires every 20 seconds.
 
 ### `toggleAutoSolve()`
 - **ON:** `autoSolveActive = true`, stop suggestion timer, run `performAutoSolve()`; log `[Coordinator] Auto Solve ON — suggestions paused`
-- **OFF:** `autoSolveActive = false`, cancel solver tasks, call `OverlayManager.clearAutoSolveResults()`, restart suggestion timer; log `[Coordinator] Auto Solve OFF — suggestions resumed`
+- **OFF:** `autoSolveActive = false`, cancel solver tasks, call `overlayManager.clearAutoSolveResults()`, restart suggestion timer; log `[Coordinator] Auto Solve OFF — suggestions resumed`
 
 ### `performAutoSolve()`
-1. Collect all unsolved questions from `sessionMemory`
-2. If empty → show "All questions solved" in overlay, return
-3. `solversInFlight = unsolved.count`
-4. Launch one `Task` per question → `solveQuestion(id:questionText:globalContext:hint:)`
-5. As each solver returns (on `MainActor`) → `OverlayManager.appendAutoSolveAnswer(id:latex:copyable:isMC:)`; `sessionMemory.markSolved(id)`
-6. Log per question: `[AutoSolve] Re-solving Q\(id)` (re-solve) or `[AutoSolve] Solver Q\(id) completed`
+1. Collect all questions from `sessionMemory` where `id ∉ solvedQuestions`
+2. If empty → call `overlayManager.showAutoSolveResults(count: 0)` ("All questions solved"), return
+3. Call `overlayManager.showAutoSolveResults(count: unsolved.count)` — renders container + header
+4. `solversInFlight = unsolved.count`
+5. Launch one `Task` per question → `solveQuestion(id:questionText:globalContext:hint:)`
+6. As each solver returns (on `MainActor`): call `overlayManager.appendAutoSolveAnswer(id:latex:copyable:isMC:)`; `sessionMemory.markSolved(id)` ; `solversInFlight -= 1`
+7. Log per question: `[AutoSolve] Solver Q\(id) completed`
 
 ### Re-solve
-Re-solve button calls `solveQuestion` for that id; on return calls `OverlayManager.replaceAutoSolveAnswer(id:latex:copyable:isMC:)`.
+Re-solve button in HTML posts `{action: "autoSolveResolve", id: N}` via `window.webkit.messageHandlers.overlay`. `OverlayManager` receives this in the **existing single `userContentController(_:didReceive:)` switch block** (handler name `"overlay"`, same block that handles `"studyAutoSolve"`, `"studyStop"`, etc.) — add:
+
+```swift
+case "autoSolveResolve":
+    if let id = dict["id"] as? Int {
+        StudyCoordinator.shared.resolveQuestion(id: id)
+    }
+```
+
+`resolveQuestion(id:)` on the coordinator calls `solveQuestion` for that id; on return calls `overlayManager.replaceAutoSolveAnswer(id:latex:copyable:isMC:)`. Log: `[AutoSolve] Re-solving Q\(id)`.
+
+### `SolveResult` Update (APIService.swift)
+
+```swift
+struct SolveResult {
+    let answerLatex: String
+    let answerCopyable: String
+    let isMultipleChoice: Bool    // ← new field; parsed from "is_multiple_choice" in JSON
+}
+```
+
+In `APIService.solveQuestion`, after parsing the JSON dict:
+```swift
+let isMC = json["is_multiple_choice"] as? Bool ?? false
+return SolveResult(answerLatex: latex, answerCopyable: copyable, isMultipleChoice: isMC)
+```
 
 ### Answer Display Format
 
@@ -189,49 +242,76 @@ No copy button for MC.
 ```
 Copy button copies `answer_copyable`. Re-solve button re-sends to solver.
 
-### New OverlayManager Methods
+### OverlayManager — Auto-Solve Panel
+
+**HTML structure** added to the study bar template (inside the existing overlay, above the prompt input):
+
+```html
+<div id="autosolve-panel" style="display:none">
+  <div class="autosolve-header" id="autosolve-header"></div>
+  <div id="autosolve-rows"></div>
+</div>
+```
+
+**New Swift methods on OverlayManager** (all call `evaluateJavaScript` on the study bar WKWebView):
+
 ```swift
 func showAutoSolveResults(count: Int)
+// JS: showAutosolvePanel(count)
+// Sets header text; shows #autosolve-panel; clears #autosolve-rows
+
 func appendAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool)
+// JS: appendAutosolveAnswer(id, escapedLatex, escapedCopyable, isMC)
+// Appends a row to #autosolve-rows; MathJax.typesetPromise() called after append
+
 func replaceAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool)
+// JS: replaceAutosolveAnswer(id, escapedLatex, escapedCopyable, isMC)
+// Replaces the row with data-id="\(id)" in #autosolve-rows
+
 func clearAutoSolveResults()
+// JS: clearAutosolvePanel()
+// Hides #autosolve-panel; clears #autosolve-rows
 ```
-All inject HTML into the existing study bar WKWebView via `evaluateJavaScript`. MathJax already loaded in the overlay renders LaTeX immediately.
+
+Each row has `data-id="\(id)"` for targeting by `replaceAutoSolveAnswer`. Row HTML:
+```html
+<div class="answer-row" data-id="N">
+  <span class="q-num">NA:</span>
+  <span class="answer">\(latex\)</span>
+  <!-- copy button only for non-MC -->
+  <button class="copy-btn" onclick="copyAutoAnswer(N, 'copyable')">📋</button>
+  <button class="resolve-btn" onclick="resolveAnswer(N)">↻</button>
+</div>
+```
+
+`resolveAnswer(N)` posts `{action: "autoSolveResolve", id: N}` via `window.webkit.messageHandlers.overlay`.
+`copyAutoAnswer(N, text)` posts `{action: "copy", text: text}`.
+
+MathJax is already loaded in the overlay; `MathJax.typesetPromise([row])` is called after each append/replace to render LaTeX.
 
 ### Study Bar Button Changes
-- **Auto Solve** (existing): text toggles `"Auto Solve"` ↔ `"Stop Solving"`; calls `StudyCoordinator.shared.toggleAutoSolve()`
-- **aLbeta** (new): inserted between Auto Solve and Pause; greyed out, disabled, no-op on click; tooltip/label "Auto-Locate (Beta) — Coming Soon"
+- **Auto Solve** (existing): text toggles `"Auto Solve"` ↔ `"Stop Solving"`; calls `StudyCoordinator.shared.toggleAutoSolve()` via existing `studyAutoSolve` message action
+- **aLbeta** (new): inserted between Auto Solve and Pause in the HTML; `disabled` attribute set; styled with `opacity: 0.4`; label "aLbeta"; `title="Auto-Locate (Beta) — Coming Soon"`; no JS action
 - **Pause / Stop**: unchanged
 
 ---
 
 ## Section 5: Backend (`main.py`)
 
-### Fix 500 Error
-Add `import traceback` if not present. In outer `except` of `auto_solve`:
+### Add Traceback Logging
+Add `import traceback` at the top of `main.py` if not already imported. In the outer `except` of `auto_solve`:
 ```python
 except Exception as e:
     logger.error(f"[AutoSolve] error: {e}", exc_info=True)
-    print(traceback.format_exc())
+    print(traceback.format_exc())   # ← add this line
     raise HTTPException(500, "Auto-solve failed")
 ```
 
-### Fix `AutoSolveRequest` Model
-Ensure `global_context` and `answer_box_hint` are explicit declared fields (missing fields on the Pydantic model is the likely cause of the 500):
-```python
-class AutoSolveRequest(BaseModel):
-    stage: str
-    image: str | None = None
-    media_type: str = "image/jpeg"
-    question_text: str | None = None
-    global_context: str | None = None
-    answer_box_hint: str | None = None
-    session_id: str | None = None
-    device_id: str | None = None
-```
+Note: `global_context` and `answer_box_hint` appear to already be declared on the `AutoSolveRequest` model. The real root cause of the 500 is unknown until the traceback is captured. Do not change the model fields unless the traceback reveals them as the issue.
 
 ### Update Solve System Prompt
 Replace `AUTO_SOLVE_SOLVE_SYSTEM_TEMPLATE` with:
+
 ```
 You are solving ONE homework/exam question.
 
@@ -261,22 +341,80 @@ Respond with raw JSON only. No markdown, no code fences, no backticks.
 
 ## Section 6: Wiring in `PrestoAIApp`
 
+### Setup (in `setupStudyModeCallbacks()`, replacing today's StudyModeManager wiring)
+
 ```swift
-// Study Mode activation
-StudyCoordinator.shared.startSession()
+let coord = StudyCoordinator.shared
 
-// Study Mode deactivation
-StudyCoordinator.shared.endSession()
+coord.onNeedsOnboarding = { [weak self] in
+    self?.studyOnboardingController?.show(
+        onEnable: {
+            StudyCoordinator.shared.activateAfterOnboarding()
+            self?.onStudyModeActivated()
+        },
+        onCustomize: {
+            self?.openStudyModeSettings()
+            StudyCoordinator.shared.activateAfterOnboarding()
+            self?.onStudyModeActivated()
+        }
+    )
+}
 
-// Auto Solve button
-StudyCoordinator.shared.toggleAutoSolve()
+coord.onSuggestionAccepted = { [weak self] followUpPrompt in
+    self?.overlayManager?.injectPromptAndSubmit(followUpPrompt)
+}
 
-// Pause/Resume
-StudyCoordinator.shared.pause()
-StudyCoordinator.shared.resume()
+coord.onSessionEnded = { [weak self] summary in
+    self?.overlayManager?.dismiss()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        self?.overlayManager?.showStudySummary(text: summary)
+    }
+    self?.refreshMenuState()
+}
+
+// Suggestion accept: coordinator sets this closure itself each time it calls
+// overlayManager.showStudySuggestion() — capturing the pending questionId in a closure.
+// PrestoAIApp must NOT set onSuggestionAccept; doing so would overwrite the coordinator's closure.
+// Dismiss: PrestoAIApp wires this; the coordinator does not own it.
+overlayManager?.onSuggestionDismiss = {
+    StudyCoordinator.shared.dismissCurrentSuggestion()
+}
 ```
 
-All `StudyModeManager.shared` and `AutoSolveManager.shared` references in `PrestoAIApp.swift` are replaced with `StudyCoordinator.shared`. Callback wiring (`onNeedsOnboarding`, `onSessionEnded`, `onSuggestionAccepted`, `onSuggestionDismiss`) follows the same pattern as today.
+### Toggle (replaces today's `toggleStudyMode`)
+
+```swift
+@objc private func toggleStudyMode() {
+    if AppStateManager.shared.isOffline {
+        overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+        return
+    }
+    if StudyCoordinator.shared.isActive {
+        StudyCoordinator.shared.endSession()
+    } else {
+        if AppStateManager.shared.currentState != .paid { showPaywall(); return }
+        StudyCoordinator.shared.startSession()
+        if StudyCoordinator.shared.isActive { onStudyModeActivated() }
+    }
+    refreshMenuState()
+}
+```
+
+### `onStudyModeActivated()` overlay callbacks
+
+```swift
+overlayManager?.onAutoSolveToggle = { StudyCoordinator.shared.toggleAutoSolve() }
+overlayManager?.onStudyPauseToggle = {
+    StudyCoordinator.shared.isPaused
+        ? StudyCoordinator.shared.resume()
+        : StudyCoordinator.shared.pause()
+}
+overlayManager?.onStudyStop = { StudyCoordinator.shared.endSession() }
+```
+
+### Menu item refresh — `sessionDurationText`
+
+Replace the existing `studyMode.$currentSuggestion` Combine sink with a sink on `StudyCoordinator.shared.$sessionDurationText` (or `$isActive`) to trigger `refreshMenuState()`. The menu item label uses `StudyCoordinator.shared.sessionDurationText` directly.
 
 ---
 
