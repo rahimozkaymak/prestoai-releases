@@ -293,6 +293,52 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
+    // MARK: - Auto Solve Results
+
+    func showAutoSolveResults(count: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.expandStudyBar()
+            self.webView?.evaluateJavaScript("showAutosolvePanel(\(count))", completionHandler: nil)
+        }
+    }
+
+    func appendAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let eLat = latex
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            let eCopy = copyable
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            let js = "appendAutosolveAnswer(\(id), '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
+            self.webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
+    func replaceAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let eLat = latex
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            let eCopy = copyable
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            let js = "replaceAutosolveAnswer(\(id), '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
+            self.webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
+    func clearAutoSolveResults() {
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript("clearAutosolvePanel()", completionHandler: nil)
+        }
+    }
+
     func dismissPopup() {
         popupDismissTimer?.invalidate()
         popupDismissTimer = nil
@@ -490,6 +536,15 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         case "suggestionDismiss":
             dismissPopup()
             onSuggestionDismiss?()
+        case "autoSolveResolve":
+            if let id = dict["id"] as? Int {
+                StudyCoordinator.shared.resolveQuestion(id: id)
+            }
+        case "copy":
+            if let text = dict["text"] as? String {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
         default: break
         }
     }
@@ -1552,6 +1607,17 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
                    animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .loading-text { font-size: 12px; color: var(--loading-text); }
+
+        /* Auto Solve panel */
+        #autosolve-panel { display: none; padding: 8px 16px 4px; }
+        .autosolve-header { font-size: 11px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; letter-spacing: 0.02em; }
+        .answer-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; font-size: 13px; color: var(--text); border-bottom: 1px solid var(--subtle-bg); }
+        .answer-row:last-child { border-bottom: none; }
+        .q-num { font-size: 11px; color: var(--text-dim); min-width: 28px; flex-shrink: 0; }
+        .answer { flex: 1; }
+        .as-copy-btn, .as-resolve-btn { background: none; border: none; cursor: pointer; font-size: 12px; color: var(--text-dim); padding: 0 2px; opacity: 0.7; flex-shrink: 0; }
+        .as-copy-btn:hover, .as-resolve-btn:hover { opacity: 1; }
+        .study-btn.disabled-btn { opacity: 0.4; cursor: default; }
         """))
 
         <!-- streaming-markdown -->
@@ -1702,11 +1768,12 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             <div class="study-controls">
                 <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
                 <button class="study-btn" id="autoSolveBtn" onclick="toggleAutoSolve()">Auto Solve</button>
+                <button class="study-btn disabled-btn" disabled title="Auto-Locate (Beta) \u{2014} Coming Soon">aLbeta</button>
                 <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
                 <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
             </div>
         </div>
-        <div class="response-area" id="responseArea"><div class="content"></div></div>
+        <div class="response-area" id="responseArea"><div id="autosolve-panel"><div class="autosolve-header" id="autosolve-header"></div><div id="autosolve-rows"></div></div><div class="content"></div></div>
         <script>
         document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
             if (e.target.closest('.study-controls') || e.target.closest('.collapse-btn') || e.target.closest('.logo')) return;
@@ -1719,6 +1786,66 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             document.addEventListener('mouseup', onUp);
         });
         setTheme(\(isDarkMode));
+
+        function showAutosolvePanel(count) {
+            var panel = document.getElementById('autosolve-panel');
+            var hdr = document.getElementById('autosolve-header');
+            document.getElementById('autosolve-rows').textContent = '';
+            hdr.textContent = count === 0 ? 'Auto Solve \\u2014 all solved' : 'Auto Solve \\u2014 ' + count + ' answers';
+            panel.style.display = 'block';
+            document.querySelector('.content').style.display = 'none';
+            document.getElementById('responseArea').classList.add('visible');
+        }
+        function clearAutosolvePanel() {
+            document.getElementById('autosolve-panel').style.display = 'none';
+            document.querySelector('.content').style.display = '';
+            document.getElementById('responseArea').classList.remove('visible');
+        }
+        function buildAnswerRow(id, latex, copyable, isMC) {
+            var div = document.createElement('div');
+            div.className = 'answer-row';
+            div.setAttribute('data-id', String(id));
+            var qnum = document.createElement('span');
+            qnum.className = 'q-num';
+            qnum.textContent = id + 'A:';
+            var ans = document.createElement('span');
+            ans.className = 'answer';
+            var mathNode = document.createTextNode('\\\\(' + latex + '\\\\)');
+            ans.appendChild(mathNode);
+            div.appendChild(qnum);
+            div.appendChild(ans);
+            if (!isMC) {
+                var cb = document.createElement('button');
+                cb.className = 'as-copy-btn';
+                cb.textContent = '\\uD83D\\uDCCB';
+                (function(c) { cb.onclick = function() { copyAutoAnswer(c); }; })(copyable);
+                div.appendChild(cb);
+            }
+            var rb = document.createElement('button');
+            rb.className = 'as-resolve-btn';
+            rb.textContent = '\\u21BB';
+            (function(i) { rb.onclick = function() { resolveAnswer(i); }; })(id);
+            div.appendChild(rb);
+            return div;
+        }
+        function appendAutosolveAnswer(id, latex, copyable, isMC) {
+            var row = buildAnswerRow(id, latex, copyable, isMC);
+            document.getElementById('autosolve-rows').appendChild(row);
+            if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
+        }
+        function replaceAutosolveAnswer(id, latex, copyable, isMC) {
+            var existing = document.querySelector('[data-id="' + id + '"]');
+            var row = buildAnswerRow(id, latex, copyable, isMC);
+            if (existing) { existing.parentNode.replaceChild(row, existing); }
+            else { document.getElementById('autosolve-rows').appendChild(row); }
+            if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
+        }
+        function copyAutoAnswer(text) {
+            window.webkit.messageHandlers.overlay.postMessage({action:'copy', text:text});
+        }
+        function resolveAnswer(id) {
+            window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id:id});
+        }
         </script>
         </body></html>
         """
