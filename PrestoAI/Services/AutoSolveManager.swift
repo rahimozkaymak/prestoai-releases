@@ -13,9 +13,8 @@ class AutoSolveManager {
     private var isIdentifyInFlight = false
     private var isFirstCapture = true
 
-    // Original capture dimensions (device pixels), needed for bbox → screen coord conversion
-    private var capturePixelWidth: Int = 0
-    private var capturePixelHeight: Int = 0
+    // Compressed image width (pixels) actually sent to the coordinator — used for bbox → screen coord conversion
+    private var compressedImageWidth: Int = 1024
 
     private init() {}
 
@@ -76,11 +75,10 @@ class AutoSolveManager {
         }
         isFirstCapture = false
         previousScreenshot = cgImage
-        capturePixelWidth = cgImage.width
-        capturePixelHeight = cgImage.height
 
         // Compress: 1024px max, JPEG 60%
-        let (compressed, _) = ImageCompressor.compressForStudy(base64)
+        let (compressed, _, compressedWidth) = ImageCompressor.compressForStudy(base64)
+        compressedImageWidth = compressedWidth
 
         let sid = sessionId ?? ""
         let deviceId = AppStateManager.shared.deviceID
@@ -154,46 +152,42 @@ class AutoSolveManager {
     @MainActor
     private func showBubble(id: Int, answerLatex: String, answerCopyable: String, bbox: CGRect) {
         guard let screen = NSScreen.main else { return }
-        let retina = screen.backingScaleFactor
+        let screenFrame = screen.frame
 
-        // Scale factor: compressed image (max 1024px) → original device pixels
-        let origW = Double(capturePixelWidth)
-        let origH = Double(capturePixelHeight)
-        let maxSide = max(origW, origH)
-        let compressScale = maxSide > 1024 ? maxSide / 1024.0 : 1.0
+        // Scale from compressed image space → screen points
+        // compressedImageWidth is the actual pixel width of the JPEG sent to the coordinator
+        let imageScale = screenFrame.width / CGFloat(compressedImageWidth)
 
-        // bbox in compressed space → device pixels → screen points
-        let devX = Double(bbox.origin.x) * compressScale
-        let devY = Double(bbox.origin.y) * compressScale
-        let devW = Double(bbox.size.width) * compressScale
-        let devH = Double(bbox.size.height) * compressScale
+        // Convert bbox (top-down image coords) to screen points (top-down)
+        let questionX = bbox.origin.x * imageScale
+        let questionY = bbox.origin.y * imageScale
+        let questionW = bbox.size.width * imageScale
+        let questionH = bbox.size.height * imageScale
 
-        let ptX = devX / Double(retina)
-        let ptY = devY / Double(retina)
-        let ptW = devW / Double(retina)
-        let ptH = devH / Double(retina)
+        // Flip Y: AppKit origin is bottom-left; bbox Y is top-down
+        let flippedY = screenFrame.height - (questionY + questionH)
 
-        // Convert top-down capture Y to AppKit bottom-up screen Y
-        let screenH = screen.frame.height
-        let bboxBottomY = screenH - ptY - ptH
-        let bboxCenterY = bboxBottomY + ptH / 2.0
+        print("[AutoSolve] Screen: \(screenFrame), imageScale: \(imageScale)")
+        print("[AutoSolve] Q\(id) bbox: \(bbox) → screen position: (\(questionX + questionW + 12), \(flippedY + questionH / 2))")
 
         let bubbleWidth: CGFloat = 280
         let bubbleHeight: CGFloat = 60  // initial; auto-resizes after MathJax renders
-        let margin: CGFloat = 8
 
-        // Position to the right of bbox; flip left if it would clip off-screen
-        var bubbleX = screen.frame.minX + ptX + ptW + margin
-        if bubbleX + bubbleWidth > screen.frame.maxX {
-            bubbleX = screen.frame.minX + ptX - bubbleWidth - margin
+        // Position to the right of bbox, vertically centered on question
+        var bubbleX = questionX + questionW + 12
+        var bubbleY = flippedY + (questionH / 2) - (bubbleHeight / 2)
+
+        // If bubble would clip off the right edge, put it to the left instead
+        if bubbleX + bubbleWidth > screenFrame.width - 20 {
+            bubbleX = questionX - bubbleWidth - 12
         }
-        var bubbleY = bboxCenterY - bubbleHeight / 2.0
 
-        // Offset down past any overlapping bubble with a 10pt gap
-        let proposed = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
+        // Overlap prevention: push new bubble below any existing overlap
+        var proposed = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
         for (_, existing) in bubbles {
             if proposed.intersects(existing.frame) {
                 bubbleY = existing.frame.minY - bubbleHeight - 10
+                proposed = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
             }
         }
 

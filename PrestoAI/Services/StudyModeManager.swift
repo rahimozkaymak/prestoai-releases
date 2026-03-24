@@ -345,7 +345,7 @@ class StudyModeManager: ObservableObject {
             guard let imageBase64 = await captureScreen() else { return }
 
             // Compress for analysis (lower quality than interactive captures)
-            let (compressed, mediaType) = ImageCompressor.compressForStudy(imageBase64)
+            let (compressed, mediaType, _) = ImageCompressor.compressForStudy(imageBase64)
 
             await MainActor.run {
                 session?.capturesCount += 1
@@ -557,32 +557,34 @@ class StudyModeManager: ObservableObject {
 
 extension ImageCompressor {
     /// Lower quality compression for study mode analysis (not user-facing)
-    static func compressForStudy(_ base64: String) -> (String, String) {
+    static func compressForStudy(_ base64: String) -> (String, String, Int) {
         guard let data = Data(base64Encoded: base64),
               let nsImage = NSImage(data: data) else {
-            return (base64, "image/png")
+            return (base64, "image/png", 1024)
         }
 
         // Resize to 1024px max, JPEG at 60% quality (analysis-only, per spec)
-        if let result = resizeAndEncodeStudy(nsImage, maxSide: 1024, quality: 0.60) {
-            return (result, "image/jpeg")
+        if let (result, compressedWidth) = resizeAndEncodeStudy(nsImage, maxSide: 1024, quality: 0.60) {
+            return (result, "image/jpeg", compressedWidth)
         }
-        return (base64, "image/png")
+        return (base64, "image/png", Int(nsImage.size.width))
     }
 
-    private static func resizeAndEncodeStudy(_ image: NSImage, maxSide: CGFloat, quality: CGFloat) -> String? {
+    private static func resizeAndEncodeStudy(_ image: NSImage, maxSide: CGFloat, quality: CGFloat) -> (String, Int)? {
         var size = image.size
         if size.width > maxSide || size.height > maxSide {
             let scale = maxSide / max(size.width, size.height)
             size = NSSize(width: size.width * scale, height: size.height * scale)
         }
 
+        let compressedWidth = Int(size.width)
+
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
             data: nil,
-            width: Int(size.width),
+            width: compressedWidth,
             height: Int(size.height),
             bitsPerComponent: 8,
             bytesPerRow: 0,
@@ -597,6 +599,6 @@ extension ImageCompressor {
         let bitmap = NSBitmapImageRep(cgImage: resizedCG)
         guard let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]) else { return nil }
 
-        return jpeg.base64EncodedString()
+        return (jpeg.base64EncodedString(), compressedWidth)
     }
 }
