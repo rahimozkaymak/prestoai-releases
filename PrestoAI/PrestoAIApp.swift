@@ -47,6 +47,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var queriesMenuItem: NSMenuItem?
     private var studyModeMenuItem: NSMenuItem?
 
+    // Feedback controller
+    private var feedbackController: FeedbackController?
+
     private var upgradePromptController: UpgradePromptController?
     private var paywallController: PaywallController?
     private var accountViewController: AccountViewController?
@@ -176,36 +179,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = makeMenuBarIcon()
             }
         }
-        
+
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Capture Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
 
-        // Study Mode toggle
-        let studyItem = NSMenuItem(title: "Study Mode", action: #selector(toggleStudyMode), keyEquivalent: "")
-        menu.addItem(studyItem)
-        self.studyModeMenuItem = studyItem
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Dynamic: queries remaining (hidden for paid users)
+        // Dynamic: queries remaining (shown for free users at top)
         let queriesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         queriesItem.isEnabled = false
         queriesItem.isHidden = true
         menu.addItem(queriesItem)
         self.queriesMenuItem = queriesItem
 
+        menu.addItem(NSMenuItem.separator())
+
+        // Study Mode toggle with hotkey label
+        let studyItem = NSMenuItem(title: "Study Mode", action: #selector(toggleStudyMode), keyEquivalent: "")
+        menu.addItem(studyItem)
+        self.studyModeMenuItem = studyItem
+
+        // Capture Screenshot with hotkey label
+        let captureItem = NSMenuItem(title: "Capture Screenshot          \u{2318}\u{21E7}X", action: #selector(captureScreenshot), keyEquivalent: "")
+        menu.addItem(captureItem)
+
+        // Quick Prompt with hotkey label
+        let quickPromptItem = NSMenuItem(title: "Quick Prompt          \u{2318}\u{21E7}Z", action: #selector(quickPromptFromMenu), keyEquivalent: "")
+        menu.addItem(quickPromptItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         menu.addItem(NSMenuItem(title: "Refer 3 Friends — Get a Free Month", action: #selector(openReferral), keyEquivalent: ""))
 
         menu.addItem(NSMenuItem.separator())
-        let preferencesItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: "")
-        menu.addItem(preferencesItem)
 
-        menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "Quit Presto.AI", action: #selector(quitApp), keyEquivalent: "q")
+        menu.addItem(NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Feedback", action: #selector(openFeedback), keyEquivalent: ""))
+        let quitItem = NSMenuItem(title: "Quit Presto AI", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
-        
+
         statusBarItem?.menu = menu
-        
+
         // Set initial dynamic state
         refreshMenuState()
     }
@@ -216,7 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch state.currentState {
         case .freeActive:
-            queriesMenuItem?.title = "\(state.queriesRemaining) free analyses remaining"
+            queriesMenuItem?.title = "\(state.queriesRemaining) free remaining"
             queriesMenuItem?.isHidden = false
         case .freeExhausted:
             queriesMenuItem?.title = "No free analyses remaining"
@@ -231,12 +242,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queriesMenuItem?.isHidden = false
         }
 
-        // Update Study Mode menu item
+        // Update Study Mode menu item with hotkey label
         let studyMode = StudyModeManager.shared
         if studyMode.isActive {
-            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))"
+            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))          \u{2318}\u{21E7}S"
         } else {
-            studyModeMenuItem?.title = "Study Mode"
+            studyModeMenuItem?.title = "Study Mode          \u{2318}\u{21E7}S"
         }
         // Only enable for paid users
         studyModeMenuItem?.isEnabled = state.currentState == .paid || studyMode.isActive
@@ -748,6 +759,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    @objc private func openFeedback() {
+        feedbackController = FeedbackController()
+        feedbackController?.show()
+    }
+
+    @objc private func quickPromptFromMenu() {
+        quickPromptCapture()
+    }
+
     @objc private func openReferral() {
         showPaywall()
     }

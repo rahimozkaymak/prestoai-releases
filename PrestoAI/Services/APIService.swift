@@ -423,6 +423,10 @@ class APIService {
         _ = try await post(endpoint: "/api/v1/study/session", body: body)
     }
 
+    func postFeedback(body: [String: Any]) async throws -> Data {
+        try await post(endpoint: "/api/feedback", body: body, authenticated: false)
+    }
+
     // MARK: - HTTP Helpers
     
     private func get(endpoint: String, token: String? = nil, retried: Bool = false) async throws -> Data {
