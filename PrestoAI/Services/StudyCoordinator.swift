@@ -461,12 +461,10 @@ class StudyCoordinator: ObservableObject {
         if autoSolveActive {
             autoSolveActive = false
             pendingAutoSolve = false
-            for t in solverTasks { t.cancel() }
-            solverTasks.removeAll(); solversInFlight = 0
-            pendingAutoSolveAnswers.removeAll()
-            overlayManager?.clearAutoSolveResults()
+            // Don't cancel in-flight solvers — let them finish and show whatever answers arrive.
+            // Only cancel tasks in endSession().
             startSuggestionTimer()
-            print("[Coordinator] Auto Solve OFF — suggestions resumed")
+            print("[Coordinator] Auto Solve OFF — in-flight solvers finishing naturally")
         } else {
             autoSolveActive = true
             suggestionTimer?.invalidate(); suggestionTimer = nil
@@ -500,19 +498,15 @@ class StudyCoordinator: ObservableObject {
     }
 
     private func runSolver(q: APIService.IdentifiedQuestion) async {
-        defer {
-            solversInFlight = max(0, solversInFlight - 1)
-            if solversInFlight == 0 {
-                let pending = pendingAutoSolveAnswers
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    self.overlayManager?.showAllAutoSolveAnswers(answers: pending)
-                    print("[AutoSolve] Loaded \(pending.count) answers into overlay")
-                }
-                solverTasks.removeAll()
+        // Guard only at entry — if auto-solve was already off when this task starts, skip it.
+        guard autoSolveActive, let globalCtx = sessionMemory?.globalContext else {
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.solversInFlight = max(0, self.solversInFlight - 1)
+                if self.solversInFlight == 0 { self.solverTasks.removeAll() }
             }
+            return
         }
-        guard autoSolveActive, let globalCtx = sessionMemory?.globalContext else { return }
         print("[AutoSolve] Launching solver for Q\(q.id)")
         do {
             let result = try await APIService.shared.solveQuestion(
@@ -521,15 +515,28 @@ class StudyCoordinator: ObservableObject {
                 answerBoxHint: q.answerBoxHint,
                 sessionId: session?.id ?? "",
                 deviceId: AppStateManager.shared.deviceID)
-            guard autoSolveActive else { return }
-            sessionMemory?.markSolved(q.id)
-            print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
+            // Don't guard on autoSolveActive here — collect the answer even if user stopped.
             await MainActor.run { [weak self] in
-                self?.pendingAutoSolveAnswers.append((
+                guard let self = self else { return }
+                self.sessionMemory?.markSolved(q.id)
+                self.pendingAutoSolveAnswers.append((
                     id: q.id, latex: result.answerLatex,
                     copyable: result.answerCopyable, isMC: result.isMultipleChoice))
+                print("[AutoSolve] Answer stored for Q\(q.id), total answers: \(self.pendingAutoSolveAnswers.count)")
+                // Incremental display — update overlay as each answer arrives.
+                self.overlayManager?.showAllAutoSolveAnswers(answers: self.pendingAutoSolveAnswers)
             }
+            print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
         } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }
+        // All state mutations on MainActor — no background-thread read of shared arrays.
+        await MainActor.run { [weak self] in
+            guard let self = self else { return }
+            self.solversInFlight = max(0, self.solversInFlight - 1)
+            if self.solversInFlight == 0 {
+                self.solverTasks.removeAll()
+                print("[AutoSolve] All solvers done. \(self.pendingAutoSolveAnswers.count) answers loaded into overlay.")
+            }
+        }
     }
 
     func resolveQuestion(id: String) {
