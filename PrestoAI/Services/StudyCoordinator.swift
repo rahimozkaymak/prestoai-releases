@@ -98,6 +98,7 @@ class StudyCoordinator: ObservableObject {
     // MARK: Auto Solve
     private var solverTasks: [Task<Void, Never>] = []
     private var solversInFlight = 0
+    private var pendingAutoSolveAnswers: [(id: String, latex: String, copyable: String, isMC: Bool)] = []
 
     // MARK: Onboarding
     private var hasShownOnboarding: Bool {
@@ -450,6 +451,7 @@ class StudyCoordinator: ObservableObject {
             autoSolveActive = false
             for t in solverTasks { t.cancel() }
             solverTasks.removeAll(); solversInFlight = 0
+            pendingAutoSolveAnswers.removeAll()
             overlayManager?.clearAutoSolveResults()
             startSuggestionTimer()
             print("[Coordinator] Auto Solve OFF — suggestions resumed")
@@ -468,6 +470,7 @@ class StudyCoordinator: ObservableObject {
             overlayManager?.showAutoSolveResults(count: 0)
             return
         }
+        pendingAutoSolveAnswers.removeAll()
         overlayManager?.showAutoSolveResults(count: unsolved.count)
         solversInFlight = unsolved.count
         for q in unsolved {
@@ -482,7 +485,15 @@ class StudyCoordinator: ObservableObject {
     private func runSolver(q: APIService.IdentifiedQuestion) async {
         defer {
             solversInFlight = max(0, solversInFlight - 1)
-            if solversInFlight == 0 { solverTasks.removeAll() }
+            if solversInFlight == 0 {
+                let pending = pendingAutoSolveAnswers
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    self.overlayManager?.showAllAutoSolveAnswers(answers: pending)
+                    print("[AutoSolve] Loaded \(pending.count) answers into overlay")
+                }
+                solverTasks.removeAll()
+            }
         }
         guard autoSolveActive, let globalCtx = sessionMemory?.globalContext else { return }
         do {
@@ -495,9 +506,9 @@ class StudyCoordinator: ObservableObject {
             guard autoSolveActive else { return }
             sessionMemory?.markSolved(q.id)
             await MainActor.run { [weak self] in
-                self?.overlayManager?.appendAutoSolveAnswer(
+                self?.pendingAutoSolveAnswers.append((
                     id: q.id, latex: result.answerLatex,
-                    copyable: result.answerCopyable, isMC: result.isMultipleChoice)
+                    copyable: result.answerCopyable, isMC: result.isMultipleChoice))
             }
             print("[AutoSolve] Solver Q\(q.id) completed")
         } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }

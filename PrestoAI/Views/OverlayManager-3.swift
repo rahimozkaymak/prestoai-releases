@@ -303,35 +303,34 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
-    func appendAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
+    // Encodes answers as a JSON array and calls setAllAutosolveAnswers(arr) in JS.
+    // The JS function uses buildAnswerRow (DOM methods, createTextNode) — no innerHTML.
+    func showAllAutoSolveAnswers(answers: [(id: String, latex: String, copyable: String, isMC: Bool)]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let eLat = latex
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-                .replacingOccurrences(of: "\n", with: "\\n")
-            let eCopy = copyable
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let eId = id.replacingOccurrences(of: "'", with: "\\'")
-            let js = "appendAutosolveAnswer('\(eId)', '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
-            self.webView?.evaluateJavaScript(js, completionHandler: nil)
+            let payload: [[String: Any]] = answers.map {
+                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable, "isMC": $0.isMC]
+            }
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  let jsonStr = String(data: jsonData, encoding: .utf8) else {
+                print("[AutoSolve] Failed to encode answers as JSON"); return
+            }
+            self.webView?.evaluateJavaScript("setAllAutosolveAnswers(\(jsonStr))") { _, error in
+                if let error = error { print("[AutoSolve] setAllAutosolveAnswers error: \(error)") }
+                else { print("[AutoSolve] Loaded \(answers.count) answers into overlay") }
+            }
         }
     }
 
     func replaceAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let eLat = latex
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-                .replacingOccurrences(of: "\n", with: "\\n")
-            let eCopy = copyable
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let eId = id.replacingOccurrences(of: "'", with: "\\'")
-            let js = "replaceAutosolveAnswer('\(eId)', '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
-            self.webView?.evaluateJavaScript(js, completionHandler: nil)
+            let payload: [String: Any] = ["id": id, "latex": latex, "copyable": copyable, "isMC": isMC]
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                  let jsonStr = String(data: jsonData, encoding: .utf8) else { return }
+            self.webView?.evaluateJavaScript("replaceAutosolveAnswerSafe(\(jsonStr))") { _, error in
+                if let error = error { print("[AutoSolve] replaceAutosolveAnswerSafe error: \(error)") }
+            }
         }
     }
 
@@ -1847,6 +1846,26 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
         function resolveAnswer(id) {
             window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id:id});
+        }
+        function setAllAutosolveAnswers(answers) {
+            var container = document.getElementById('autosolve-rows');
+            container.textContent = '';
+            for (var i = 0; i < answers.length; i++) {
+                var a = answers[i];
+                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC));
+            }
+            if (window.MathJax && MathJax.typesetPromise) {
+                MathJax.typesetPromise([container]).catch(function(){});
+            }
+        }
+        function replaceAutosolveAnswerSafe(ans) {
+            var existing = document.querySelector('[data-id="' + ans.id + '"]');
+            var row = buildAnswerRow(ans.id, ans.latex, ans.copyable, ans.isMC);
+            if (existing) { existing.parentNode.replaceChild(row, existing); }
+            else { document.getElementById('autosolve-rows').appendChild(row); }
+            if (window.MathJax && MathJax.typesetPromise) {
+                MathJax.typesetPromise([row]).catch(function(){});
+            }
         }
         </script>
         </body></html>
