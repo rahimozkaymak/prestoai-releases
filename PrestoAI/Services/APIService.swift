@@ -512,6 +512,7 @@ class APIService {
     struct SolveResult {
         let answerLatex: String
         let answerCopyable: String
+        let isMultipleChoice: Bool
     }
 
     func identifyQuestions(image: String, sessionId: String, deviceId: String) async throws -> IdentifyResponse {
@@ -564,7 +565,8 @@ class APIService {
 
         return SolveResult(
             answerLatex: json["answer_latex"] as? String ?? "",
-            answerCopyable: json["answer_copyable"] as? String ?? ""
+            answerCopyable: json["answer_copyable"] as? String ?? "",
+            isMultipleChoice: json["is_multiple_choice"] as? Bool ?? false
         )
     }
 
