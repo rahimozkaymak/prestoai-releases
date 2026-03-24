@@ -303,7 +303,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
-    func appendAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool) {
+    func appendAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let eLat = latex
@@ -313,12 +313,13 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             let eCopy = copyable
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
-            let js = "appendAutosolveAnswer(\(id), '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
+            let eId = id.replacingOccurrences(of: "'", with: "\\'")
+            let js = "appendAutosolveAnswer('\(eId)', '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
             self.webView?.evaluateJavaScript(js, completionHandler: nil)
         }
     }
 
-    func replaceAutoSolveAnswer(id: Int, latex: String, copyable: String, isMC: Bool) {
+    func replaceAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let eLat = latex
@@ -328,7 +329,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             let eCopy = copyable
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
-            let js = "replaceAutosolveAnswer(\(id), '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
+            let eId = id.replacingOccurrences(of: "'", with: "\\'")
+            let js = "replaceAutosolveAnswer('\(eId)', '\(eLat)', '\(eCopy)', \(isMC ? "true" : "false"))"
             self.webView?.evaluateJavaScript(js, completionHandler: nil)
         }
     }
@@ -537,7 +539,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             dismissPopup()
             onSuggestionDismiss?()
         case "autoSolveResolve":
-            if let id = dict["id"] as? Int {
+            if let id = dict["id"] as? String {
                 StudyCoordinator.shared.resolveQuestion(id: id)
             }
         case "copy":
@@ -1807,7 +1809,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             div.setAttribute('data-id', String(id));
             var qnum = document.createElement('span');
             qnum.className = 'q-num';
-            qnum.textContent = id + 'A:';
+            qnum.textContent = id + ':';
             var ans = document.createElement('span');
             ans.className = 'answer';
             var mathNode = document.createTextNode('\\\\(' + latex + '\\\\)');

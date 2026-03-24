@@ -8,13 +8,13 @@ import CoreGraphics
 struct SessionMemory {
     var globalContext: String = ""
     var questions: [APIService.IdentifiedQuestion] = []
-    var solvedQuestions: Set<Int> = []
+    var solvedQuestions: Set<String> = []
     var lastCGImage: CGImage?   // for page-change detection
 
     func nextUnsolvedQuestion() -> APIService.IdentifiedQuestion? {
         questions.first { !solvedQuestions.contains($0.id) }
     }
-    mutating func markSolved(_ id: Int) { solvedQuestions.insert(id) }
+    mutating func markSolved(_ id: String) { solvedQuestions.insert(id) }
 }
 
 // MARK: - StudySession
@@ -414,7 +414,7 @@ class StudyCoordinator: ObservableObject {
         print("[Coordinator] Suggestion shown for Q\(q.id)")
     }
 
-    func handleUserAcceptedSuggestion(questionId: Int) {
+    func handleUserAcceptedSuggestion(questionId: String) {
         guard let q = sessionMemory?.questions.first(where: { $0.id == questionId }),
               let globalCtx = sessionMemory?.globalContext else { return }
         session?.suggestionsAccepted += 1
@@ -503,7 +503,7 @@ class StudyCoordinator: ObservableObject {
         } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }
     }
 
-    func resolveQuestion(id: Int) {
+    func resolveQuestion(id: String) {
         guard let q = sessionMemory?.questions.first(where: { $0.id == id }),
               let globalCtx = sessionMemory?.globalContext else { return }
         print("[AutoSolve] Re-solving Q\(id)")

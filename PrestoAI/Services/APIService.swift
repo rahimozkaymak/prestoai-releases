@@ -470,7 +470,7 @@ class APIService {
     // MARK: - Auto-Solve V2 (multi-agent, two-stage)
 
     struct IdentifiedQuestion {
-        let id: Int
+        let id: String
         let questionText: String
         let answerBoxHint: String
     }
@@ -508,11 +508,19 @@ class APIService {
 
         if let arr = json["questions"] as? [[String: Any]] {
             for item in arr {
-                guard let id = item["id"] as? Int,
-                      let qText = item["question_text"] as? String else { continue }
+                let rawId = item["id"]
+                let id: String
+                if let s = rawId as? String { id = s }
+                else if let n = rawId as? Int { id = String(n) }
+                else { print("[AutoSolve] Skipping question with missing/unparseable id: \(String(describing: rawId))"); continue }
+                guard let qText = item["question_text"] as? String else {
+                    print("[AutoSolve] Skipping question \(id): missing question_text"); continue
+                }
                 let hint = item["answer_box_hint"] as? String ?? ""
                 questions.append(IdentifiedQuestion(id: id, questionText: qText, answerBoxHint: hint))
             }
+        } else {
+            print("[AutoSolve] 'questions' key missing or wrong type in response. Keys: \(json.keys.joined(separator: ", "))")
         }
 
         return IdentifyResponse(globalContext: globalContext, questions: questions)
