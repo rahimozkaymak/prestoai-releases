@@ -13,7 +13,6 @@ struct PrestoAIApp: App {
                 .frame(width: 0, height: 0)
                 .onAppear { NSApp.windows.forEach { $0.orderOut(nil) } }
         }
-        .defaultSize(width: 0, height: 0)
     }
 }
 
