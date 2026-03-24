@@ -39,7 +39,7 @@ func makePrestoPanel(size: NSSize, title: String = "") -> NSPanel {
 }
 
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusBarItem: NSStatusItem?
     private var overlayManager: OverlayManager?
     private var setupWindow: NSWindow?
@@ -72,6 +72,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Nuke the default app main menu so macOS has nowhere to inject
+        // "Settings..." with a gear icon (or any other auto-inserted items).
+        NSApp.mainMenu = NSMenu()
+
         setupMenuBar()
         setupServices()
 
@@ -219,25 +223,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: "")
-        settingsItem.image = nil
-        menu.addItem(settingsItem)
+        // "Settings" title triggers macOS auto-gear; use "Preferences" to avoid it.
+        menu.addItem(NSMenuItem(title: "Preferences", action: #selector(openSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Feedback", action: #selector(openFeedback), keyEquivalent: ""))
         let quitItem = NSMenuItem(title: "Quit Presto AI", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
 
+        menu.delegate = self
         statusBarItem?.menu = menu
-
-        // macOS 13+ auto-applies gear icons to NSMenuItems titled "Settings".
-        // Clear all images after the menu is set so no item has an icon.
-        DispatchQueue.main.async { [weak self] in
-            self?.statusBarItem?.menu?.items.forEach { $0.image = nil }
-        }
 
         // Set initial dynamic state
         refreshMenuState()
     }
     
+    // MARK: - NSMenuDelegate
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.items.forEach { $0.image = nil }
+        refreshMenuState()
+    }
+
     /// Update dynamic menu items without rebuilding the whole menu.
     private func refreshMenuState() {
         let state = AppStateManager.shared
