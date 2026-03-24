@@ -523,8 +523,9 @@ class StudyCoordinator: ObservableObject {
                     id: q.id, latex: result.answerLatex,
                     copyable: result.answerCopyable, isMC: result.isMultipleChoice))
                 print("[AutoSolve] Answer stored for Q\(q.id), total answers: \(self.pendingAutoSolveAnswers.count)")
-                // Incremental display — update overlay as each answer arrives.
-                self.overlayManager?.showAllAutoSolveAnswers(answers: self.pendingAutoSolveAnswers)
+                // Incremental display — sorted by id so order is always 1A, 1B, 1C…
+                let sorted = self.pendingAutoSolveAnswers.sorted { $0.id < $1.id }
+                self.overlayManager?.showAllAutoSolveAnswers(answers: sorted)
             }
             print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
         } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }
