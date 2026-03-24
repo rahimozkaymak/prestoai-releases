@@ -522,6 +522,7 @@ class APIService {
         ]
 
         let data = try await post(endpoint: "/api/v1/study/auto-solve", body: body)
+        print("[AutoSolve] Response body: \(String(data: data, encoding: .utf8).map { String($0.prefix(500)) } ?? "nil")")
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw APIError.serverError("Invalid auto-solve response")

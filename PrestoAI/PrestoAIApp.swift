@@ -522,6 +522,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.overlayManager?.updateAutoSolveButton(active: false)
         }
 
+        AutoSolveManager.shared.onAnswersReady = { [weak self] answers in
+            self?.overlayManager?.showAutoSolveAnswers(answers)
+        }
+
         overlayManager?.onAutoSolveToggle = { [weak self] in
             self?.toggleAutoSolve()
         }

@@ -27,6 +27,7 @@ class AutoSolveManager {
     private let maxBackoff: TimeInterval = 120
 
     var onDeactivated: (() -> Void)?
+    var onAnswersReady: (([APIService.AutoSolveAnswer]) -> Void)?
 
     private let cornerBox = CornerStatusBox.shared
 
@@ -161,6 +162,7 @@ class AutoSolveManager {
     // MARK: - Handle API Response
 
     private func handleResponse(_ response: APIService.AutoSolveResponse) {
+        print("[AutoSolve] Received response: isHomework=\(response.isHomework) answers=\(response.answers.count)")
         if !homeworkAccepted {
             if response.isHomework, let subject = response.subject {
                 state = .displaying
@@ -173,8 +175,8 @@ class AutoSolveManager {
                 resumeScanning()
             } else {
                 state = .displaying
-                let answer = response.answers.first!
-                cornerBox.showAnswer(answer.answerText)
+                print("[AutoSolve] Displaying \(response.answers.count) answer\(response.answers.count == 1 ? "" : "s") in overlay")
+                onAnswersReady?(response.answers)
             }
         }
     }
