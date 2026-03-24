@@ -266,14 +266,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // Update Study Mode menu item (key equivalent is set on the item itself)
-        let studyMode = StudyModeManager.shared
-        if studyMode.isActive {
-            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))"
+        let coord = StudyCoordinator.shared
+        if coord.isActive {
+            studyModeMenuItem?.title = "Study Mode (Active \(coord.sessionDurationText))"
         } else {
             studyModeMenuItem?.title = "Study Mode"
         }
         // Only enable for paid users
-        studyModeMenuItem?.isEnabled = state.currentState == .paid || studyMode.isActive
+        studyModeMenuItem?.isEnabled = state.currentState == .paid || coord.isActive
     }
     
     // MARK: - Custom Menu Bar Icon
@@ -308,6 +308,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     
     private func setupServices() {
         overlayManager = OverlayManager()
+        StudyCoordinator.shared.overlayManager = overlayManager
         studyOnboardingController = StudyOnboardingController()
 
         let hotkeys = HotkeyService.shared
@@ -342,76 +343,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Study Mode
 
     private func setupStudyModeCallbacks() {
-        let studyMode = StudyModeManager.shared
+        let coord = StudyCoordinator.shared
 
-        studyMode.onNeedsOnboarding = { [weak self] in
+        coord.onNeedsOnboarding = { [weak self] in
             self?.studyOnboardingController?.show(
                 onEnable: {
-                    StudyModeManager.shared.activateAfterOnboarding()
+                    StudyCoordinator.shared.activateAfterOnboarding()
                     self?.onStudyModeActivated()
                 },
                 onCustomize: {
-                    // Open settings to Study Mode tab, then activate
                     self?.openStudyModeSettings()
-                    StudyModeManager.shared.activateAfterOnboarding()
+                    StudyCoordinator.shared.activateAfterOnboarding()
                     self?.onStudyModeActivated()
                 }
             )
         }
 
-        studyMode.onSuggestionAccepted = { [weak self] followUpPrompt in
-            // Inject prompt into study bar and submit as if the user typed it
-            self?.overlayManager?.injectPromptAndSubmit(followUpPrompt)
-        }
-
-        studyMode.onSessionEnded = { [weak self] summary in
-            AutoSolveManager.shared.deactivate()
+        coord.onSessionEnded = { [weak self] summary in
             self?.overlayManager?.dismiss()
-            // Show summary in popup overlay (same frosted glass style)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 self?.overlayManager?.showStudySummary(text: summary)
             }
             self?.refreshMenuState()
         }
 
-        // Wire suggestion accept/dismiss through overlay manager
-        overlayManager?.onSuggestionAccept = {
-            StudyModeManager.shared.acceptSuggestion()
-        }
-        overlayManager?.onSuggestionDismiss = {
-            StudyModeManager.shared.dismissSuggestion()
+        coord.onSuggestionAccepted = { [weak self] display in
+            self?.overlayManager?.expandStudyBar()
+            self?.overlayManager?.appendChunk(display)
+            self?.overlayManager?.signalStreamEnd()
         }
 
-        // Observe suggestion changes
-        let cancellable = studyMode.$currentSuggestion.sink { [weak self] suggestion in
-            guard let suggestion = suggestion else { return }
-            self?.overlayManager?.showStudySuggestion(text: suggestion.suggestionText)
+        overlayManager?.onSuggestionDismiss = {
+            StudyCoordinator.shared.dismissCurrentSuggestion()
         }
-        objc_setAssociatedObject(self, "studySuggestionCancellable", cancellable, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+        let cancellable = StudyCoordinator.shared.$sessionDurationText.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshMenuState() }
+        }
+        objc_setAssociatedObject(self, "coordDurationCancellable", cancellable, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
     @objc private func toggleStudyMode() {
-        let stateManager = AppStateManager.shared
-
-        if stateManager.isOffline {
+        if AppStateManager.shared.isOffline {
             overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
             return
         }
-
-        let studyMode = StudyModeManager.shared
-
-        if studyMode.isActive {
-            studyMode.deactivate()
+        let coord = StudyCoordinator.shared
+        if coord.isActive {
+            coord.endSession()
         } else {
-            // Check paid status
-            if stateManager.currentState != .paid {
-                showPaywall()
-                return
-            }
-            studyMode.activate()
-            if studyMode.isActive {
-                onStudyModeActivated()
-            }
+            if AppStateManager.shared.currentState != .paid { showPaywall(); return }
+            coord.startSession()
+            if coord.isActive { onStudyModeActivated() }
         }
         refreshMenuState()
     }
@@ -420,7 +403,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Show the Study Mode bar (persistent, compact, bottom-right)
         overlayManager?.onPromptSubmit = { [weak self] text in
             guard let self = self else { return }
-            StudyModeManager.shared.recordQuestionAsked()
+            StudyCoordinator.shared.recordQuestionAsked()
 
             // Expand the bar to show the answer area
             self.overlayManager?.expandStudyBar()
@@ -428,7 +411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Capture screen and stream into the study bar
             Task {
                 guard let screenshot = await self.captureForStudyMode() else { return }
-                let contextPrefix = StudyModeManager.shared.buildSessionContextPrompt() ?? ""
+                let contextPrefix = StudyCoordinator.shared.buildSessionContextPrompt() ?? ""
                 let fullPrompt = contextPrefix.isEmpty ? text : "\(contextPrefix)\n\nUser question: \(text)"
 
                 let (compressed, mediaType) = ImageCompressor.compress(screenshot)
@@ -462,20 +445,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         overlayManager?.onStudyPauseToggle = {
-            let sm = StudyModeManager.shared
-            sm.isPaused ? sm.resume() : sm.pause()
+            let c = StudyCoordinator.shared
+            c.isPaused ? c.resume() : c.pause()
         }
         overlayManager?.onAutoSolveToggle = {
-            let am = AutoSolveManager.shared
-            if am.isActive {
-                am.deactivate()
-            } else {
-                let sid = StudyModeManager.shared.currentSessionId ?? UUID().uuidString
-                am.activate(sessionId: sid)
-            }
+            StudyCoordinator.shared.toggleAutoSolve()
         }
-        overlayManager?.onStudyStop = { [weak self] in
-            StudyModeManager.shared.deactivate()
+        overlayManager?.onStudyStop = {
+            StudyCoordinator.shared.endSession()
         }
         overlayManager?.showPromptInput(studyMode: true)
         refreshMenuState()
