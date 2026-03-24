@@ -1,4 +1,17 @@
 import AppKit
+import Vision
+
+// MARK: - QuestionRegion
+
+/// Represents a detected question on screen with Vision-derived positioning data.
+struct QuestionRegion {
+    let id: Int
+    let questionBounds: CGRect   // VN normalized coords (bottom-left origin, 0–1)
+    let answerPlacement: CGPoint // VN normalized coords (bottom-left origin, 0–1) — bubble center
+    let imageSize: CGSize        // pixel dimensions of the analyzed CGImage
+}
+
+// MARK: - AutoSolveManager
 
 class AutoSolveManager {
 
@@ -13,9 +26,6 @@ class AutoSolveManager {
     private var isIdentifyInFlight = false
     private var isFirstCapture = true
     private var solversInFlight = 0
-
-    // Compressed image width (pixels) actually sent to the coordinator — used for bbox → screen coord conversion
-    private var compressedImageWidth: Int = 1024
 
     private init() {}
 
@@ -75,16 +85,17 @@ class AutoSolveManager {
 
         // Similarity check — skip if screen hasn't changed (bypass on first capture)
         if !isFirstCapture, let prev = previousScreenshot {
-            if frameSimilarity(prev, cgImage) >= 0.85 {
-                return
-            }
+            if frameSimilarity(prev, cgImage) >= 0.85 { return }
         }
         isFirstCapture = false
         previousScreenshot = cgImage
 
-        // Compress: 1024px max, JPEG 60%
-        let (compressed, _, compressedWidth) = ImageCompressor.compressForStudy(base64)
-        compressedImageWidth = compressedWidth
+        // Stage 0: local Vision layout analysis — no network, runs in milliseconds
+        let regions = analyzeScreenLayout(screenshot: cgImage)
+        print("[AutoSolve] Vision regions: \(regions.count)")
+
+        // Compress image for coordinator
+        let (compressed, _, _) = ImageCompressor.compressForStudy(base64)
 
         let sid = sessionId ?? ""
         let deviceId = AppStateManager.shared.deviceID
@@ -99,7 +110,7 @@ class AutoSolveManager {
             guard isActive else { return }
             print("[AutoSolve] Questions found: \(result.questions.count)")
             for q in result.questions {
-                print("[AutoSolve] Q\(q.id): \(q.questionText.prefix(80))... bbox=\(q.bbox)")
+                print("[AutoSolve] Q\(q.id): \(q.questionText.prefix(80))...")
             }
 
             if result.questions.isEmpty { return }
@@ -111,8 +122,11 @@ class AutoSolveManager {
 
             let globalContext = result.globalContext
             solversInFlight = result.questions.count
+
             for q in result.questions {
-                print("[AutoSolve] Launching solver for Q\(q.id)")
+                // Match coordinator question to Vision region by sequential order (Q1→regions[0])
+                let region: QuestionRegion? = q.id <= regions.count ? regions[q.id - 1] : nil
+                print("[AutoSolve] Launching solver Q\(q.id), hasRegion=\(region != nil)")
                 let task = Task { [weak self] in
                     guard let self = self else { return }
                     await self.solveQuestion(
@@ -120,7 +134,7 @@ class AutoSolveManager {
                         questionText: q.questionText,
                         globalContext: globalContext,
                         hint: q.answerBoxHint,
-                        bbox: q.bbox
+                        region: region
                     )
                 }
                 solverTasks.append(task)
@@ -133,8 +147,11 @@ class AutoSolveManager {
     // MARK: - Solve (per question)
 
     private func solveQuestion(id: Int, questionText: String, globalContext: String,
-                               hint: String, bbox: CGRect) async {
-        defer { solversInFlight = max(0, solversInFlight - 1) }
+                               hint: String, region: QuestionRegion?) async {
+        defer {
+            solversInFlight = max(0, solversInFlight - 1)
+            if solversInFlight == 0 { solverTasks.removeAll() }
+        }
         guard isActive else { return }
 
         do {
@@ -152,7 +169,7 @@ class AutoSolveManager {
             await MainActor.run { [weak self] in
                 guard let self = self, self.isActive else { return }
                 self.showBubble(id: id, answerLatex: result.answerLatex,
-                                answerCopyable: result.answerCopyable, bbox: bbox)
+                                answerCopyable: result.answerCopyable, region: region)
             }
         } catch {
             print("[AutoSolve] Solver Q\(id) FAILED: \(error)")
@@ -162,37 +179,32 @@ class AutoSolveManager {
     // MARK: - Bubble Management
 
     @MainActor
-    private func showBubble(id: Int, answerLatex: String, answerCopyable: String, bbox: CGRect) {
+    private func showBubble(id: Int, answerLatex: String, answerCopyable: String, region: QuestionRegion?) {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.frame
-
-        // Scale from compressed image space → screen points
-        // compressedImageWidth is the actual pixel width of the JPEG sent to the coordinator
-        let imageScale = screenFrame.width / CGFloat(compressedImageWidth)
-
-        // Convert bbox X extents to screen points
-        let questionX = bbox.origin.x * imageScale
-        let questionW = bbox.size.width * imageScale
-
-        // Convert bbox vertical center to macOS screen coordinates (bottom-left origin)
-        let centerY = screenFrame.height - (bbox.origin.y + bbox.size.height / 2) * imageScale
-
-        print("[AutoSolve] Screen: \(screenFrame), imageScale: \(imageScale)")
-        print("[AutoSolve] Q\(id) bbox: \(bbox) → screen center: (\(questionX + questionW + 12), \(centerY))")
-
         let bubbleWidth: CGFloat = 280
         let bubbleHeight: CGFloat = 60  // initial; auto-resizes after MathJax renders
 
-        // Position to the right of bbox, vertically centered on question
-        var bubbleX = questionX + questionW + 12
-        var bubbleY = centerY - (bubbleHeight / 2)
+        var bubbleX: CGFloat
+        var bubbleY: CGFloat
 
-        // If bubble would clip off the right edge, put it to the left instead
-        if bubbleX + bubbleWidth > screenFrame.width - 20 {
-            bubbleX = questionX - bubbleWidth - 12
+        if let region = region {
+            let pos = imageToScreen(normalizedPoint: region.answerPlacement, imageSize: region.imageSize)
+            // Center the bubble on the computed placement point
+            bubbleX = pos.x - bubbleWidth / 2
+            bubbleY = pos.y - bubbleHeight / 2
+            print("[AutoSolve] Q\(id) VN placement=\(region.answerPlacement) → screen=(\(Int(pos.x)), \(Int(pos.y)))")
+        } else {
+            bubbleX = (screenFrame.width - bubbleWidth) / 2
+            bubbleY = (screenFrame.height - bubbleHeight) / 2
+            print("[AutoSolve] Q\(id) no region — fallback center")
         }
 
-        // Overlap prevention: push new bubble below any existing overlap
+        // Clamp to screen bounds
+        bubbleX = min(max(20, bubbleX), screenFrame.width - bubbleWidth - 20)
+        bubbleY = min(max(20, bubbleY), screenFrame.height - bubbleHeight - 20)
+
+        // Overlap prevention: push new bubble below any existing one
         var proposed = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
         for (_, existing) in bubbles {
             if proposed.intersects(existing.frame) {
@@ -202,7 +214,7 @@ class AutoSolveManager {
         }
 
         let bubbleFrame = NSRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
-        print("[AutoSolve] Bubble Q\(id) created at frame=\(bubbleFrame)")
+        print("[AutoSolve] Bubble Q\(id) created at \(bubbleFrame)")
         let bubble = AnswerBubbleWindow(
             answerLatex: answerLatex,
             answerCopyable: answerCopyable,
@@ -214,10 +226,155 @@ class AutoSolveManager {
 
     @MainActor
     private func clearBubbles() {
-        for (_, bubble) in bubbles {
-            bubble.fadeOut()
-        }
+        for (_, bubble) in bubbles { bubble.fadeOut() }
         bubbles.removeAll()
+    }
+
+    // MARK: - Vision Layout Analysis
+
+    private struct TextBlock {
+        let text: String
+        let pixelBounds: CGRect  // top-left origin, pixel coordinates
+        let vnBounds: CGRect     // VN normalized (bottom-left origin, 0–1)
+    }
+
+    private func analyzeScreenLayout(screenshot: CGImage) -> [QuestionRegion] {
+        let imgW = CGFloat(screenshot.width)
+        let imgH = CGFloat(screenshot.height)
+        let imageSize = CGSize(width: imgW, height: imgH)
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false  // faster; positions matter more than corrections
+
+        let handler = VNImageRequestHandler(cgImage: screenshot, options: [:])
+        try? handler.perform([request])
+
+        guard let observations = request.results, !observations.isEmpty else {
+            print("[AutoSolve] Vision: no text found on screen")
+            return []
+        }
+
+        // Convert observations to TextBlocks sorted top-to-bottom (ascending pixel Y)
+        let blocks: [TextBlock] = observations.compactMap { obs in
+            guard let top = obs.topCandidates(1).first else { return nil }
+            let vn = obs.boundingBox
+            // VN → pixel (top-left origin): flip Y axis
+            let px = CGRect(
+                x: vn.origin.x * imgW,
+                y: (1.0 - vn.origin.y - vn.size.height) * imgH,
+                width: vn.size.width * imgW,
+                height: vn.size.height * imgH
+            )
+            return TextBlock(text: top.string, pixelBounds: px, vnBounds: vn)
+        }.sorted { $0.pixelBounds.origin.y < $1.pixelBounds.origin.y }
+
+        // Patterns that identify the start of a question
+        let questionPatterns: [String] = [
+            #"^\[?\d+[A-Za-z]?\.?\]?\s*[\[\(]?\d*\s*points?\s*[\]\)]?"#,
+            #"^Question\s+\d+"#,
+            #"^Problem\s+\d+"#,
+            #"^\d+\.\s"#,
+            #"^\[\d+[A-Z]?\.\]"#,
+            #"^Part\s+[a-z]"#
+        ]
+
+        func isQuestionStart(_ text: String) -> Bool {
+            let t = text.trimmingCharacters(in: .whitespaces)
+            return questionPatterns.contains { t.range(of: $0, options: .regularExpression) != nil }
+        }
+
+        let startIndices = blocks.indices.filter { isQuestionStart(blocks[$0].text) }
+        guard !startIndices.isEmpty else {
+            print("[AutoSolve] Vision: no question patterns found in \(blocks.count) text blocks")
+            return []
+        }
+        print("[AutoSolve] Vision: \(startIndices.count) question(s) detected, \(blocks.count) total text blocks")
+
+        var regions: [QuestionRegion] = []
+
+        for (qi, startIdx) in startIndices.enumerated() {
+            let endIdx = qi + 1 < startIndices.count ? startIndices[qi + 1] : blocks.count
+            let qBlocks = Array(blocks[startIdx..<endIdx])
+
+            // Pixel bounding rect covering all text in this question group
+            let qBounds = qBlocks.reduce(CGRect.null) { $0.union($1.pixelBounds) }
+
+            // Y coordinate of the next question's first line (or image bottom)
+            let nextQY: CGFloat = qi + 1 < startIndices.count
+                ? blocks[startIndices[qi + 1]].pixelBounds.origin.y
+                : imgH
+
+            // Determine answer placement in pixel space, then convert to VN normalized
+            let placementPx = answerPlacementPixel(
+                qBlocks: qBlocks, qBounds: qBounds,
+                nextQuestionY: nextQY, centerX: qBounds.midX
+            )
+            let placementVN = CGPoint(
+                x: placementPx.x / imgW,
+                y: 1.0 - placementPx.y / imgH  // pixel top-left → VN bottom-left
+            )
+
+            // VN bounds of the question block
+            let vnBounds = CGRect(
+                x: qBounds.origin.x / imgW,
+                y: 1.0 - (qBounds.origin.y + qBounds.height) / imgH,
+                width: qBounds.width / imgW,
+                height: qBounds.height / imgH
+            )
+
+            print("[AutoSolve] Vision Q\(qi + 1): px=\(qBounds.integral), placementPx=(\(Int(placementPx.x)), \(Int(placementPx.y)))")
+
+            regions.append(QuestionRegion(
+                id: qi + 1,
+                questionBounds: vnBounds,
+                answerPlacement: placementVN,
+                imageSize: imageSize
+            ))
+        }
+
+        return regions
+    }
+
+    /// Computes where to place the answer bubble in pixel coordinates (top-left origin).
+    private func answerPlacementPixel(qBlocks: [TextBlock], qBounds: CGRect,
+                                      nextQuestionY: CGFloat, centerX: CGFloat) -> CGPoint {
+        // 1. "SHOW YOUR WORK:" → place bubble just above it
+        if let showWork = qBlocks.first(where: { $0.text.uppercased().hasPrefix("SHOW YOUR WORK") }) {
+            let lastAbove = qBlocks
+                .filter { $0.pixelBounds.maxY <= showWork.pixelBounds.origin.y }
+                .max(by: { $0.pixelBounds.maxY < $1.pixelBounds.maxY })
+            let y = lastAbove.map { $0.pixelBounds.maxY + 8 } ?? (showWork.pixelBounds.origin.y - 8)
+            return CGPoint(x: centerX, y: y)
+        }
+
+        // 2. Last multiple choice option [a]–[e] / (a)–(e) → place just below it
+        let mcPattern = #"^[\[\(][a-eA-E][\]\)][.\s]"#
+        let choices = qBlocks.filter { $0.text.range(of: mcPattern, options: .regularExpression) != nil }
+        if let last = choices.max(by: { $0.pixelBounds.maxY < $1.pixelBounds.maxY }) {
+            return CGPoint(x: centerX, y: last.pixelBounds.maxY + 10)
+        }
+
+        // 3. Gap before next question → use midpoint of the gap
+        let gap = nextQuestionY - qBounds.maxY
+        if gap > 40 {
+            return CGPoint(x: centerX, y: qBounds.maxY + gap / 2)
+        }
+
+        // 4. Fallback: directly below question block
+        return CGPoint(x: centerX, y: qBounds.maxY + 10)
+    }
+
+    // MARK: - Coordinate Conversion
+
+    /// Converts VN normalized coordinates (bottom-left origin, 0–1) to macOS screen points.
+    /// Both Vision and macOS AppKit use bottom-left origin, so no Y-flip is needed.
+    private func imageToScreen(normalizedPoint: CGPoint, imageSize: CGSize) -> CGPoint {
+        let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        return CGPoint(
+            x: normalizedPoint.x * screen.width,
+            y: normalizedPoint.y * screen.height
+        )
     }
 
     // MARK: - Screen Capture

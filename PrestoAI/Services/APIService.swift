@@ -501,7 +501,6 @@ class APIService {
     struct IdentifiedQuestion {
         let id: Int
         let questionText: String
-        let bbox: CGRect          // pixel coords in compressed (1024px max) image space
         let answerBoxHint: String
     }
 
@@ -538,19 +537,9 @@ class APIService {
         if let arr = json["questions"] as? [[String: Any]] {
             for item in arr {
                 guard let id = item["id"] as? Int,
-                      let qText = item["question_text"] as? String,
-                      let bboxDict = item["bbox"] as? [String: Any] else { continue }
-                let x = (bboxDict["x"] as? Double) ?? 0
-                let y = (bboxDict["y"] as? Double) ?? 0
-                let w = (bboxDict["w"] as? Double) ?? 0
-                let h = (bboxDict["h"] as? Double) ?? 0
+                      let qText = item["question_text"] as? String else { continue }
                 let hint = item["answer_box_hint"] as? String ?? ""
-                questions.append(IdentifiedQuestion(
-                    id: id,
-                    questionText: qText,
-                    bbox: CGRect(x: x, y: y, width: w, height: h),
-                    answerBoxHint: hint
-                ))
+                questions.append(IdentifiedQuestion(id: id, questionText: qText, answerBoxHint: hint))
             }
         }
 
