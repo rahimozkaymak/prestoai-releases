@@ -6,11 +6,14 @@ struct PrestoAIApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        // Menu bar-only app — use Settings scene instead of WindowGroup
-        // to avoid creating a phantom empty window on launch.
-        Settings {
-            SettingsView()
+        // Menu bar-only app — AppDelegate drives everything.
+        // WindowGroup is required by SwiftUI; we immediately close it via onAppear.
+        WindowGroup("Presto AI") {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onAppear { NSApp.windows.forEach { $0.orderOut(nil) } }
         }
+        .defaultSize(width: 0, height: 0)
     }
 }
 
@@ -65,6 +68,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
     
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         setupServices()
@@ -221,6 +228,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         statusBarItem?.menu = menu
+
+        // macOS 13+ auto-applies gear icons to NSMenuItems titled "Settings".
+        // Clear all images after the menu is set so no item has an icon.
+        DispatchQueue.main.async { [weak self] in
+            self?.statusBarItem?.menu?.items.forEach { $0.image = nil }
+        }
 
         // Set initial dynamic state
         refreshMenuState()
