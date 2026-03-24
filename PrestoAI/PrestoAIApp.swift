@@ -417,10 +417,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func onStudyModeActivated() {
-        // Activate AutoSolve alongside Study Mode
-        let sid = StudyModeManager.shared.currentSessionId ?? UUID().uuidString
-        AutoSolveManager.shared.activate(sessionId: sid)
-
         // Show the Study Mode bar (persistent, compact, bottom-right)
         overlayManager?.onPromptSubmit = { [weak self] text in
             guard let self = self else { return }
@@ -468,6 +464,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlayManager?.onStudyPauseToggle = {
             let sm = StudyModeManager.shared
             sm.isPaused ? sm.resume() : sm.pause()
+        }
+        overlayManager?.onAutoSolveToggle = {
+            let am = AutoSolveManager.shared
+            if am.isActive {
+                am.deactivate()
+            } else {
+                let sid = StudyModeManager.shared.currentSessionId ?? UUID().uuidString
+                am.activate(sessionId: sid)
+            }
         }
         overlayManager?.onStudyStop = { [weak self] in
             StudyModeManager.shared.deactivate()

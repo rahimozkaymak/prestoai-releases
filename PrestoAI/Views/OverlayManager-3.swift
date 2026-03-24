@@ -221,6 +221,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     var onStudyPauseToggle: (() -> Void)?
     /// Callback for Study Mode stop
     var onStudyStop: (() -> Void)?
+    /// Callback for Auto Solve toggle
+    var onAutoSolveToggle: (() -> Void)?
     /// Callback for suggestion accept / dismiss
     var onSuggestionAccept: (() -> Void)?
     var onSuggestionDismiss: (() -> Void)?
@@ -478,6 +480,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             onStudyPauseToggle?()
         case "studyStop":
             onStudyStop?()
+        case "studyAutoSolve":
+            onAutoSolveToggle?()
         case "studyCollapse":
             collapseStudyBar()
         case "suggestionAccept":
@@ -1570,6 +1574,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
 
         <script>
         var isPaused = false;
+        var isAutoSolving = false;
         var rawMarkdown = '';
         var smdParser = null;
         var libsReady = false;
@@ -1588,6 +1593,13 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             document.getElementById('statusDot').className = isPaused ? 'study-dot paused' : 'study-dot';
             document.getElementById('statusLabel').textContent = isPaused ? 'Paused' : 'Study Mode';
             window.webkit.messageHandlers.overlay.postMessage({action:'studyPause'});
+        }
+        function toggleAutoSolve() {
+            isAutoSolving = !isAutoSolving;
+            var btn = document.getElementById('autoSolveBtn');
+            btn.textContent = isAutoSolving ? 'Stop Solving' : 'Auto Solve';
+            btn.classList.toggle('active', isAutoSolving);
+            window.webkit.messageHandlers.overlay.postMessage({action:'studyAutoSolve'});
         }
         function stopStudy() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
@@ -1689,6 +1701,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             <span class="drag-spacer"></span>
             <div class="study-controls">
                 <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
+                <button class="study-btn" id="autoSolveBtn" onclick="toggleAutoSolve()">Auto Solve</button>
                 <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
                 <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
             </div>
