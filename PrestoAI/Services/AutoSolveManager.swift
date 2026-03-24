@@ -12,6 +12,7 @@ class AutoSolveManager {
     private var sessionId: String?
     private var isIdentifyInFlight = false
     private var isFirstCapture = true
+    private var solversInFlight = 0
 
     // Compressed image width (pixels) actually sent to the coordinator — used for bbox → screen coord conversion
     private var compressedImageWidth: Int = 1024
@@ -40,6 +41,7 @@ class AutoSolveManager {
         scanTimer?.invalidate()
         scanTimer = nil
         isIdentifyInFlight = false
+        solversInFlight = 0
         DispatchQueue.main.async { [weak self] in
             self?.clearBubbles()
         }
@@ -52,6 +54,10 @@ class AutoSolveManager {
 
     private func captureAndIdentify() {
         guard isActive, !isIdentifyInFlight else { return }
+        guard solversInFlight == 0 else {
+            print("[AutoSolve] Skipping re-scan — \(solversInFlight) solver(s) still in flight")
+            return
+        }
         isIdentifyInFlight = true
 
         Task { [weak self] in
@@ -104,6 +110,7 @@ class AutoSolveManager {
             await MainActor.run { clearBubbles() }
 
             let globalContext = result.globalContext
+            solversInFlight = result.questions.count
             for q in result.questions {
                 print("[AutoSolve] Launching solver for Q\(q.id)")
                 let task = Task { [weak self] in
@@ -127,6 +134,7 @@ class AutoSolveManager {
 
     private func solveQuestion(id: Int, questionText: String, globalContext: String,
                                hint: String, bbox: CGRect) async {
+        defer { solversInFlight = max(0, solversInFlight - 1) }
         guard isActive else { return }
 
         do {
@@ -162,24 +170,22 @@ class AutoSolveManager {
         // compressedImageWidth is the actual pixel width of the JPEG sent to the coordinator
         let imageScale = screenFrame.width / CGFloat(compressedImageWidth)
 
-        // Convert bbox (top-down image coords) to screen points (top-down)
+        // Convert bbox X extents to screen points
         let questionX = bbox.origin.x * imageScale
-        let questionY = bbox.origin.y * imageScale
         let questionW = bbox.size.width * imageScale
-        let questionH = bbox.size.height * imageScale
 
-        // Flip Y: AppKit origin is bottom-left; bbox Y is top-down
-        let flippedY = screenFrame.height - (questionY + questionH)
+        // Convert bbox vertical center to macOS screen coordinates (bottom-left origin)
+        let centerY = screenFrame.height - (bbox.origin.y + bbox.size.height / 2) * imageScale
 
         print("[AutoSolve] Screen: \(screenFrame), imageScale: \(imageScale)")
-        print("[AutoSolve] Q\(id) bbox: \(bbox) → screen position: (\(questionX + questionW + 12), \(flippedY + questionH / 2))")
+        print("[AutoSolve] Q\(id) bbox: \(bbox) → screen center: (\(questionX + questionW + 12), \(centerY))")
 
         let bubbleWidth: CGFloat = 280
         let bubbleHeight: CGFloat = 60  // initial; auto-resizes after MathJax renders
 
         // Position to the right of bbox, vertically centered on question
         var bubbleX = questionX + questionW + 12
-        var bubbleY = flippedY + (questionH / 2) - (bubbleHeight / 2)
+        var bubbleY = centerY - (bubbleHeight / 2)
 
         // If bubble would clip off the right edge, put it to the left instead
         if bubbleX + bubbleWidth > screenFrame.width - 20 {
