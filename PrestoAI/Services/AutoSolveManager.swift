@@ -1,198 +1,221 @@
 import AppKit
-import Combine
 
 class AutoSolveManager {
 
     static let shared = AutoSolveManager()
 
-    enum State {
-        case idle
-        case scanning
-        case analyzing
-        case displaying
-    }
+    private(set) var isActive = false
+    private var bubbles: [Int: AnswerBubbleWindow] = [:]
+    private var scanTimer: Timer?
+    private var previousScreenshot: CGImage?
+    private var solverTasks: [Task<Void, Never>] = []
+    private var sessionId: String?
+    private var isIdentifyInFlight = false
+    private var isFirstCapture = true
 
-    @Published private(set) var state: State = .idle
-    @Published private(set) var isActive: Bool = false
+    // Original capture dimensions (device pixels), needed for bbox → screen coord conversion
+    private var capturePixelWidth: Int = 0
+    private var capturePixelHeight: Int = 0
 
-    private var captureTimer: Timer?
-    private var captureTask: Task<Void, Never>?
-    private var previousScreenshot: NSImage?
-    private var sessionId: String = ""
-    private var homeworkAccepted = false
-
-    private let captureInterval: TimeInterval = 5.0
-    private let changeThreshold: Double = 0.85
-    private var backoffSeconds: TimeInterval = 0
-    private let maxBackoff: TimeInterval = 120
-
-    var onDeactivated: (() -> Void)?
-    var onAnswersReady: (([APIService.AutoSolveAnswer]) -> Void)?
-
-    private let cornerBox = CornerStatusBox.shared
-
-    private init() {
-        cornerBox.onAutoSolveAccept = { [weak self] in
-            guard let self = self else { return }
-            self.homeworkAccepted = true
-            // Clear previousScreenshot so the similarity guard doesn't block the solve request
-            // (the screen is unchanged since the detect scan, so similarity would be ~100%)
-            self.previousScreenshot = nil
-            print("[AutoSolve] Accept tapped — homeworkAccepted=\(self.homeworkAccepted), state=\(self.state)")
-            self.resumeScanning()
-            print("[AutoSolve] resumeScanning called — homeworkAccepted=\(self.homeworkAccepted), state=\(self.state)")
-            // Fire immediately — don't wait for the next 5s timer tick
-            self.captureAndCompare()
-        }
-        cornerBox.onAutoSolveDecline = { [weak self] in
-            self?.deactivate()
-        }
-        cornerBox.onDismissedAnswer = { [weak self] in
-            self?.resumeScanning()
-        }
-    }
+    private init() {}
 
     // MARK: - Lifecycle
 
-    func activate() {
+    func activate(sessionId: String) {
         guard !isActive else { return }
         isActive = true
-        sessionId = UUID().uuidString
-        homeworkAccepted = false
+        self.sessionId = sessionId
+        isFirstCapture = true
         previousScreenshot = nil
-        state = .scanning
-        startCaptureTimer()
         print("[AutoSolve] Activated, session: \(sessionId)")
+        captureAndIdentify()
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            self?.captureAndIdentify()
+        }
     }
 
     func deactivate() {
-        guard isActive else { return }
         isActive = false
-        state = .idle
-        captureTask?.cancel()
-        captureTask = nil
-        stopCaptureTimer()
-        isRequestInFlight = false
-        cornerBox.hide()
+        for task in solverTasks { task.cancel() }
+        solverTasks.removeAll()
+        scanTimer?.invalidate()
+        scanTimer = nil
+        isIdentifyInFlight = false
+        DispatchQueue.main.async { [weak self] in
+            self?.clearBubbles()
+        }
         previousScreenshot = nil
-        homeworkAccepted = false
-        onDeactivated?()
-        print("[AutoSolve] Deactivated — all timers cancelled")
+        sessionId = nil
+        print("[AutoSolve] Deactivated — all tasks cancelled, bubbles cleared")
     }
 
-    func togglePause() {
-        if state == .scanning {
-            stopCaptureTimer()
-            state = .idle
-        } else if state == .idle && isActive {
-            state = .scanning
-            startCaptureTimer()
+    // MARK: - Capture + Identify
+
+    private func captureAndIdentify() {
+        guard isActive, !isIdentifyInFlight else { return }
+        isIdentifyInFlight = true
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            defer { self.isIdentifyInFlight = false }
+            await self.performCaptureAndIdentify()
         }
     }
 
-    private func resumeScanning() {
+    private func performCaptureAndIdentify() async {
         guard isActive else { return }
-        state = .scanning
-        startCaptureTimer()
-    }
 
-    // MARK: - Capture Timer
+        guard let (cgImage, base64) = await captureScreen() else { return }
+        guard isActive else { return }
 
-    private func startCaptureTimer() {
-        stopCaptureTimer()
-        captureTimer = Timer.scheduledTimer(withTimeInterval: captureInterval, repeats: true) { [weak self] _ in
-            self?.captureAndCompare()
+        // Similarity check — skip if screen hasn't changed (bypass on first capture)
+        if !isFirstCapture, let prev = previousScreenshot {
+            if frameSimilarity(prev, cgImage) >= 0.85 {
+                return
+            }
         }
-    }
+        isFirstCapture = false
+        previousScreenshot = cgImage
+        capturePixelWidth = cgImage.width
+        capturePixelHeight = cgImage.height
 
-    private func stopCaptureTimer() {
-        captureTimer?.invalidate()
-        captureTimer = nil
-    }
+        // Compress: 1024px max, JPEG 60%
+        let (compressed, _) = ImageCompressor.compressForStudy(base64)
 
-    // MARK: - Capture & Compare
+        let sid = sessionId ?? ""
+        let deviceId = AppStateManager.shared.deviceID
 
-    private var isRequestInFlight = false
+        do {
+            let result = try await APIService.shared.identifyQuestions(
+                image: compressed,
+                sessionId: sid,
+                deviceId: deviceId
+            )
 
-    private func captureAndCompare() {
-        guard isActive, state == .scanning, !isRequestInFlight else { return }
-
-        captureTask?.cancel()
-        captureTask = Task { @MainActor in
             guard isActive else { return }
-            guard let base64 = await captureScreen() else { return }
-            guard isActive else { return }
+            print("[AutoSolve] Coordinator: found \(result.questions.count) questions")
 
-            guard let data = Data(base64Encoded: base64),
-                  let currentImage = NSImage(data: data) else { return }
+            if result.questions.isEmpty { return }
 
-            if let prev = previousScreenshot {
-                let similarity = VisionClickController.frameSimilarity(prev, currentImage)
-                print("[AutoSolve] Frame similarity: \(String(format: "%.1f%%", similarity * 100))")
+            // Cancel in-flight solvers, clear existing bubbles
+            for task in solverTasks { task.cancel() }
+            solverTasks.removeAll()
+            await MainActor.run { clearBubbles() }
 
-                if similarity >= changeThreshold {
-                    return
+            let globalContext = result.globalContext
+            for q in result.questions {
+                let task = Task { [weak self] in
+                    await self?.solveQuestion(
+                        id: q.id,
+                        questionText: q.questionText,
+                        globalContext: globalContext,
+                        hint: q.answerBoxHint,
+                        bbox: q.bbox
+                    )
                 }
+                solverTasks.append(task)
             }
-
-            guard isActive else { return }
-            previousScreenshot = currentImage
-
-            state = .analyzing
-            isRequestInFlight = true
-            stopCaptureTimer()
-
-            let (compressed, mediaType) = ImageCompressor.compressForStudy(base64)
-            let mode = homeworkAccepted ? "solve" : "detect"
-            print("[AutoSolve] Sending request — mode=\(mode), homeworkAccepted=\(homeworkAccepted)")
-            let deviceId = AppStateManager.shared.deviceID
-
-            do {
-                let response = try await APIService.shared.analyzeAutoSolve(
-                    image: compressed,
-                    mediaType: mediaType,
-                    mode: mode,
-                    sessionId: sessionId,
-                    deviceId: deviceId
-                )
-
-                isRequestInFlight = false
-                guard isActive else { return }
-                backoffSeconds = 0
-                handleResponse(response)
-            } catch {
-                isRequestInFlight = false
-                print("[AutoSolve] API error: \(error.localizedDescription)")
-                resumeScanning()
-            }
+        } catch {
+            print("[AutoSolve] Identify error: \(error.localizedDescription)")
         }
     }
 
-    // MARK: - Handle API Response
+    // MARK: - Solve (per question)
 
-    private func handleResponse(_ response: APIService.AutoSolveResponse) {
-        print("[AutoSolve] Received response: isHomework=\(response.isHomework) answers=\(response.answers.count)")
-        if !homeworkAccepted {
-            if response.isHomework, let subject = response.subject {
-                state = .displaying
-                cornerBox.showSuggestion(subject: subject)
-            } else {
-                resumeScanning()
+    private func solveQuestion(id: Int, questionText: String, globalContext: String,
+                               hint: String, bbox: CGRect) async {
+        guard isActive else { return }
+
+        do {
+            let result = try await APIService.shared.solveQuestion(
+                questionText: questionText,
+                globalContext: globalContext,
+                answerBoxHint: hint,
+                sessionId: sessionId ?? "",
+                deviceId: AppStateManager.shared.deviceID
+            )
+
+            guard isActive else { return }
+            print("[AutoSolve] Solver \(id): answer ready")
+
+            await MainActor.run { [weak self] in
+                guard let self = self, self.isActive else { return }
+                self.showBubble(id: id, answerLatex: result.answerLatex,
+                                answerCopyable: result.answerCopyable, bbox: bbox)
             }
-        } else {
-            if response.answers.isEmpty {
-                resumeScanning()
-            } else {
-                state = .displaying
-                print("[AutoSolve] Displaying \(response.answers.count) answer\(response.answers.count == 1 ? "" : "s") in overlay")
-                onAnswersReady?(response.answers)
+        } catch {
+            print("[AutoSolve] Solver \(id) failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Bubble Management
+
+    @MainActor
+    private func showBubble(id: Int, answerLatex: String, answerCopyable: String, bbox: CGRect) {
+        guard let screen = NSScreen.main else { return }
+        let retina = screen.backingScaleFactor
+
+        // Scale factor: compressed image (max 1024px) → original device pixels
+        let origW = Double(capturePixelWidth)
+        let origH = Double(capturePixelHeight)
+        let maxSide = max(origW, origH)
+        let compressScale = maxSide > 1024 ? maxSide / 1024.0 : 1.0
+
+        // bbox in compressed space → device pixels → screen points
+        let devX = Double(bbox.origin.x) * compressScale
+        let devY = Double(bbox.origin.y) * compressScale
+        let devW = Double(bbox.size.width) * compressScale
+        let devH = Double(bbox.size.height) * compressScale
+
+        let ptX = devX / Double(retina)
+        let ptY = devY / Double(retina)
+        let ptW = devW / Double(retina)
+        let ptH = devH / Double(retina)
+
+        // Convert top-down capture Y to AppKit bottom-up screen Y
+        let screenH = screen.frame.height
+        let bboxBottomY = screenH - ptY - ptH
+        let bboxCenterY = bboxBottomY + ptH / 2.0
+
+        let bubbleWidth: CGFloat = 280
+        let bubbleHeight: CGFloat = 60  // initial; auto-resizes after MathJax renders
+        let margin: CGFloat = 8
+
+        // Position to the right of bbox; flip left if it would clip off-screen
+        var bubbleX = screen.frame.minX + ptX + ptW + margin
+        if bubbleX + bubbleWidth > screen.frame.maxX {
+            bubbleX = screen.frame.minX + ptX - bubbleWidth - margin
+        }
+        var bubbleY = bboxCenterY - bubbleHeight / 2.0
+
+        // Offset down past any overlapping bubble with a 10pt gap
+        let proposed = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
+        for (_, existing) in bubbles {
+            if proposed.intersects(existing.frame) {
+                bubbleY = existing.frame.minY - bubbleHeight - 10
             }
         }
+
+        let bubble = AnswerBubbleWindow(
+            answerLatex: answerLatex,
+            answerCopyable: answerCopyable,
+            initialFrame: NSRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
+        )
+        bubble.show()
+        bubbles[id] = bubble
+    }
+
+    @MainActor
+    private func clearBubbles() {
+        for (_, bubble) in bubbles {
+            bubble.fadeOut()
+        }
+        bubbles.removeAll()
     }
 
     // MARK: - Screen Capture
 
-    private func captureScreen() async -> String? {
+    private func captureScreen() async -> (CGImage, String)? {
         guard CGPreflightScreenCaptureAccess() else {
             print("[AutoSolve] No screen recording permission")
             return nil
@@ -216,8 +239,37 @@ class AutoSolveManager {
                     return
                 }
 
-                continuation.resume(returning: pngData.base64EncodedString())
+                continuation.resume(returning: (cgImage, pngData.base64EncodedString()))
             }
         }
+    }
+
+    // MARK: - Frame Similarity (pixel-sampled, ~196 points)
+
+    private func frameSimilarity(_ a: CGImage, _ b: CGImage) -> Double {
+        guard a.width == b.width, a.height == b.height else { return 0.0 }
+        guard let dataA = a.dataProvider?.data as Data?,
+              let dataB = b.dataProvider?.data as Data? else { return 0.0 }
+
+        let bprA = a.bytesPerRow, bppA = a.bitsPerPixel / 8
+        let bprB = b.bytesPerRow, bppB = b.bitsPerPixel / 8
+        let grid = 14, tolerance = 10
+        var matches = 0
+
+        for row in 0..<grid {
+            let y = row * a.height / grid
+            for col in 0..<grid {
+                let x = col * a.width / grid
+                let oA = y * bprA + x * bppA
+                let oB = y * bprB + x * bppB
+                guard oA + 2 < dataA.count, oB + 2 < dataB.count else { continue }
+                let rD = abs(Int(dataA[oA]) - Int(dataB[oB]))
+                let gD = abs(Int(dataA[oA + 1]) - Int(dataB[oB + 1]))
+                let bD = abs(Int(dataA[oA + 2]) - Int(dataB[oB + 2]))
+                if rD <= tolerance && gD <= tolerance && bD <= tolerance { matches += 1 }
+            }
+        }
+
+        return Double(matches) / Double(grid * grid)
     }
 }

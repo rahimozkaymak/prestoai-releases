@@ -100,6 +100,8 @@ class StudyModeManager: ObservableObject {
     @Published private(set) var currentActivity: String = ""
     @Published private(set) var isPrivateAppDetected: Bool = false
 
+    var currentSessionId: String? { session?.id }
+
     private var session: StudySession?
     private var captureDecision = CaptureDecision()
     private var captureTimer: Timer?

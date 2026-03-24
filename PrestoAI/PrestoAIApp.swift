@@ -62,7 +62,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Vision Click controller
     private let visionClickController = VisionClickController()
-    private var automationController: AutomationController?
 
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
@@ -321,11 +320,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.quickPromptCapture()
         }
         hotkeys.onEsc = { [weak self] in
-            if let auto = self?.automationController, auto.isRunning {
-                auto.cancel()
-            } else {
-                self?.overlayManager?.dismiss()
-            }
+            self?.overlayManager?.dismiss()
         }
         hotkeys.onStudyModeToggle = { [weak self] in
             print("[Presto.AI] Hotkey triggered Study Mode toggle")
@@ -342,7 +337,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Wire Study Mode callbacks
         setupStudyModeCallbacks()
-        setupAutoSolveCallbacks()
     }
 
     // MARK: - Study Mode
@@ -371,6 +365,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         studyMode.onSessionEnded = { [weak self] summary in
+            AutoSolveManager.shared.deactivate()
             self?.overlayManager?.dismiss()
             // Show summary in popup overlay (same frosted glass style)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -422,6 +417,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func onStudyModeActivated() {
+        // Activate AutoSolve alongside Study Mode
+        let sid = StudyModeManager.shared.currentSessionId ?? UUID().uuidString
+        AutoSolveManager.shared.activate(sessionId: sid)
+
         // Show the Study Mode bar (persistent, compact, bottom-right)
         overlayManager?.onPromptSubmit = { [weak self] text in
             guard let self = self else { return }
@@ -515,43 +514,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.settingsPanel = panel
     }
     
-    // MARK: - Auto-Solve
-
-    private func setupAutoSolveCallbacks() {
-        AutoSolveManager.shared.onDeactivated = { [weak self] in
-            self?.overlayManager?.updateAutoSolveButton(active: false)
-        }
-
-        AutoSolveManager.shared.onAnswersReady = { [weak self] answers in
-            self?.overlayManager?.showAutoSolveAnswers(answers)
-        }
-
-        overlayManager?.onAutoSolveToggle = { [weak self] in
-            self?.toggleAutoSolve()
-        }
-    }
-
-    private func toggleAutoSolve() {
-        let stateManager = AppStateManager.shared
-
-        if stateManager.isOffline {
-            overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
-            return
-        }
-
-        let autoSolve = AutoSolveManager.shared
-
-        if autoSolve.isActive {
-            autoSolve.deactivate()
-        } else {
-            if stateManager.currentState != .paid {
-                showPaywall()
-                return
-            }
-            autoSolve.activate()
-        }
-    }
-
     // MARK: - Actions
 
     @objc private func captureScreenshot() {
@@ -630,13 +592,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Dismiss overlay BEFORE capturing screenshot so it's not in the image
             self.overlayManager?.dismiss()
 
-            // Wait for overlay dismiss animation, then route through AutomationController
+            // Wait for overlay dismiss animation, then execute single VisionClick command
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                let controller = AutomationController()
-                self.automationController = controller
-
-                controller.handleCommand(command, targetApp: targetApp, overlayManager: self.overlayManager) { [weak self] in
-                    self?.automationController = nil
+                self.visionClickController.executeCommand(command, targetApp: targetApp, overlayManager: self.overlayManager) { [weak self] success, message in
+                    DispatchQueue.main.async {
+                        if !success {
+                            self?.overlayManager?.showError(message)
+                        }
+                    }
                 }
             }
         }

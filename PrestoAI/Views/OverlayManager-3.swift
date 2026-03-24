@@ -224,14 +224,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     /// Callback for suggestion accept / dismiss
     var onSuggestionAccept: (() -> Void)?
     var onSuggestionDismiss: (() -> Void)?
-    var onAutoSolveToggle: (() -> Void)?
-
-    func updateAutoSolveButton(active: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            self?.webView?.evaluateJavaScript("if(typeof setAutoSolveState==='function')setAutoSolveState(\(active))", completionHandler: nil)
-        }
-    }
-
     func injectPromptAndSubmit(_ text: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -494,8 +486,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         case "suggestionDismiss":
             dismissPopup()
             onSuggestionDismiss?()
-        case "autoSolveToggle":
-            onAutoSolveToggle?()
         default: break
         }
     }
@@ -1602,17 +1592,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         function stopStudy() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
         }
-        function toggleAutoSolve() {
-            var btn = document.getElementById('autoSolveBtn');
-            var isOn = btn.classList.toggle('active');
-            btn.textContent = isOn ? 'Auto-Solve ●' : 'Auto-Solve';
-            window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveToggle'});
-        }
-        function setAutoSolveState(on) {
-            var btn = document.getElementById('autoSolveBtn');
-            if (on) { btn.classList.add('active'); btn.textContent = 'Auto-Solve ●'; }
-            else { btn.classList.remove('active'); btn.textContent = 'Auto-Solve'; }
-        }
         function collapseResponse() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyCollapse'});
         }
@@ -1710,7 +1689,6 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             <span class="drag-spacer"></span>
             <div class="study-controls">
                 <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
-                <button class="study-btn" id="autoSolveBtn" onclick="toggleAutoSolve()">Auto-Solve</button>
                 <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
                 <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
             </div>
@@ -1808,63 +1786,4 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         """
     }
 
-    // MARK: - Auto-Solve Answers
-
-    func showAutoSolveAnswers(_ answers: [APIService.AutoSolveAnswer]) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.isPageReady = false
-            self.chunkQueue.removeAll()
-            self.ensureWindow()
-            self.webView?.loadHTMLString(self.autoSolveHTML(answers), baseURL: nil)
-            self.present()
-        }
-    }
-
-    private func autoSolveHTML(_ answers: [APIService.AutoSolveAnswer]) -> String {
-        func esc(_ s: String) -> String {
-            s.replacingOccurrences(of: "&", with: "&amp;")
-             .replacingOccurrences(of: "<", with: "&lt;")
-             .replacingOccurrences(of: ">", with: "&gt;")
-             .replacingOccurrences(of: "\n", with: "<br>")
-        }
-
-        let cardsHTML = answers.map { answer in
-            """
-            <div class="answer-card">
-                <div class="q-text">\(esc(answer.questionText))</div>
-                <div class="a-text">\(esc(answer.answerText))</div>
-            </div>
-            """
-        }.joined(separator: "\n")
-
-        let countLabel = "\(answers.count) answer\(answers.count == 1 ? "" : "s")"
-
-        return """
-        <!DOCTYPE html><html>
-        \(sharedHead(extraStyle: """
-        .content-area { padding: 10px 16px 12px; }
-        .section-title {
-            font-size: 10px; font-weight: 600; color: var(--text-dim);
-            letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 10px;
-        }
-        .answer-card {
-            background: var(--subtle-bg); border: 1px solid var(--subtle-border);
-            border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
-        }
-        .q-text { font-size: 11px; color: var(--text-dim); margin-bottom: 5px; line-height: 1.4; }
-        .a-text { font-size: 13px; color: var(--text); line-height: 1.5; }
-        """))
-        <body>
-        \(headerHTML())
-        <div class="content-area">
-            <div class="section-title">Auto-Solve &mdash; \(countLabel)</div>
-            \(cardsHTML)
-        </div>
-        \(bottomBarHTML())
-        \(gripJS())
-        <script>setTheme(\(isDarkMode))</script>
-        </body></html>
-        """
-    }
 }

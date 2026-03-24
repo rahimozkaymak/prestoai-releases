@@ -496,61 +496,82 @@ class APIService {
         return data
     }
     
-    // MARK: - Auto-Solve
+    // MARK: - Auto-Solve V2 (multi-agent, two-stage)
 
-    struct AutoSolveAnswer {
+    struct IdentifiedQuestion {
+        let id: Int
         let questionText: String
-        let answerText: String
-        let yPositionPercent: Double  // 0.0 = top, 1.0 = bottom
+        let bbox: CGRect          // pixel coords in compressed (1024px max) image space
+        let answerBoxHint: String
     }
 
-    struct AutoSolveResponse {
-        let isHomework: Bool
-        let subject: String?
-        let promptText: String?
-        let answers: [AutoSolveAnswer]
+    struct IdentifyResponse {
+        let globalContext: String
+        let questions: [IdentifiedQuestion]
     }
 
-    func analyzeAutoSolve(image: String, mediaType: String, mode: String,
-                          sessionId: String, deviceId: String) async throws -> AutoSolveResponse {
+    struct SolveResult {
+        let answerLatex: String
+        let answerCopyable: String
+    }
+
+    func identifyQuestions(image: String, sessionId: String, deviceId: String) async throws -> IdentifyResponse {
         let body: [String: Any] = [
+            "stage": "identify",
             "image": image,
-            "media_type": mediaType,
-            "mode": mode,
             "session_id": sessionId,
             "device_id": deviceId
         ]
-
         let data = try await post(endpoint: "/api/v1/study/auto-solve", body: body)
-        print("[AutoSolve] Response body: \(String(data: data, encoding: .utf8).map { String($0.prefix(500)) } ?? "nil")")
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw APIError.serverError("Invalid auto-solve response")
+            throw APIError.serverError("Invalid identify response")
         }
 
-        let isHomework = json["is_homework"] as? Bool ?? false
-        let subject = json["subject"] as? String
-        let promptText = json["prompt_text"] as? String
+        let globalContext = json["global_context"] as? String ?? ""
+        var questions: [IdentifiedQuestion] = []
 
-        var answers: [AutoSolveAnswer] = []
-        if let answersArray = json["answers"] as? [[String: Any]] {
-            for item in answersArray {
-                guard let questionText = item["question_text"] as? String,
-                      let answerText = item["answer_text"] as? String,
-                      let yPos = item["y_position_percent"] as? Double else { continue }
-                answers.append(AutoSolveAnswer(
-                    questionText: questionText,
-                    answerText: answerText,
-                    yPositionPercent: yPos
+        if let arr = json["questions"] as? [[String: Any]] {
+            for item in arr {
+                guard let id = item["id"] as? Int,
+                      let qText = item["question_text"] as? String,
+                      let bboxDict = item["bbox"] as? [String: Any] else { continue }
+                let x = (bboxDict["x"] as? Double) ?? 0
+                let y = (bboxDict["y"] as? Double) ?? 0
+                let w = (bboxDict["w"] as? Double) ?? 0
+                let h = (bboxDict["h"] as? Double) ?? 0
+                let hint = item["answer_box_hint"] as? String ?? ""
+                questions.append(IdentifiedQuestion(
+                    id: id,
+                    questionText: qText,
+                    bbox: CGRect(x: x, y: y, width: w, height: h),
+                    answerBoxHint: hint
                 ))
             }
         }
 
-        return AutoSolveResponse(
-            isHomework: isHomework,
-            subject: subject,
-            promptText: promptText,
-            answers: answers
+        return IdentifyResponse(globalContext: globalContext, questions: questions)
+    }
+
+    func solveQuestion(questionText: String, globalContext: String, answerBoxHint: String,
+                       sessionId: String, deviceId: String) async throws -> SolveResult {
+        let body: [String: Any] = [
+            "stage": "solve",
+            "question_text": questionText,
+            "global_context": globalContext,
+            "answer_box_hint": answerBoxHint,
+            "session_id": sessionId,
+            "device_id": deviceId
+        ]
+        let data = try await post(endpoint: "/api/v1/study/auto-solve", body: body)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid solve response")
+        }
+
+        return SolveResult(
+            answerLatex: json["answer_latex"] as? String ?? "",
+            answerCopyable: json["answer_copyable"] as? String ?? ""
         )
     }
 
