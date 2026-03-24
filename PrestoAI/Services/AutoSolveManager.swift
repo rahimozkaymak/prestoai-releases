@@ -33,8 +33,16 @@ class AutoSolveManager {
 
     private init() {
         cornerBox.onAutoSolveAccept = { [weak self] in
-            self?.homeworkAccepted = true
-            self?.resumeScanning()
+            guard let self = self else { return }
+            self.homeworkAccepted = true
+            // Clear previousScreenshot so the similarity guard doesn't block the solve request
+            // (the screen is unchanged since the detect scan, so similarity would be ~100%)
+            self.previousScreenshot = nil
+            print("[AutoSolve] Accept tapped — homeworkAccepted=\(self.homeworkAccepted), state=\(self.state)")
+            self.resumeScanning()
+            print("[AutoSolve] resumeScanning called — homeworkAccepted=\(self.homeworkAccepted), state=\(self.state)")
+            // Fire immediately — don't wait for the next 5s timer tick
+            self.captureAndCompare()
         }
         cornerBox.onAutoSolveDecline = { [weak self] in
             self?.deactivate()
@@ -136,6 +144,7 @@ class AutoSolveManager {
 
             let (compressed, mediaType) = ImageCompressor.compressForStudy(base64)
             let mode = homeworkAccepted ? "solve" : "detect"
+            print("[AutoSolve] Sending request — mode=\(mode), homeworkAccepted=\(homeworkAccepted)")
             let deviceId = AppStateManager.shared.deviceID
 
             do {
