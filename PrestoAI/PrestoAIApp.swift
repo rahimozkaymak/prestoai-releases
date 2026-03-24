@@ -191,17 +191,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Study Mode toggle with hotkey label
-        let studyItem = NSMenuItem(title: "Study Mode", action: #selector(toggleStudyMode), keyEquivalent: "")
+        // Study Mode — Cmd+Shift+S (native right-aligned shortcut display)
+        let studyItem = NSMenuItem(title: "Study Mode", action: #selector(toggleStudyMode), keyEquivalent: "s")
+        studyItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(studyItem)
         self.studyModeMenuItem = studyItem
 
-        // Capture Screenshot with hotkey label
-        let captureItem = NSMenuItem(title: "Capture Screenshot          \u{2318}\u{21E7}X", action: #selector(captureScreenshot), keyEquivalent: "")
+        // Capture Screenshot — Cmd+Shift+X
+        let captureItem = NSMenuItem(title: "Capture Screenshot", action: #selector(captureScreenshot), keyEquivalent: "x")
+        captureItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(captureItem)
 
-        // Quick Prompt with hotkey label
-        let quickPromptItem = NSMenuItem(title: "Quick Prompt          \u{2318}\u{21E7}Z", action: #selector(quickPromptFromMenu), keyEquivalent: "")
+        // Quick Prompt — Cmd+Shift+Z
+        let quickPromptItem = NSMenuItem(title: "Quick Prompt", action: #selector(quickPromptFromMenu), keyEquivalent: "z")
+        quickPromptItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(quickPromptItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -210,7 +213,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ""))
+        let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: "")
+        settingsItem.image = nil
+        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem(title: "Feedback", action: #selector(openFeedback), keyEquivalent: ""))
         let quitItem = NSMenuItem(title: "Quit Presto AI", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
@@ -242,12 +247,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queriesMenuItem?.isHidden = false
         }
 
-        // Update Study Mode menu item with hotkey label
+        // Update Study Mode menu item (key equivalent is set on the item itself)
         let studyMode = StudyModeManager.shared
         if studyMode.isActive {
-            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))          \u{2318}\u{21E7}S"
+            studyModeMenuItem?.title = "Study Mode (Active \(studyMode.sessionDurationText))"
         } else {
-            studyModeMenuItem?.title = "Study Mode          \u{2318}\u{21E7}S"
+            studyModeMenuItem?.title = "Study Mode"
         }
         // Only enable for paid users
         studyModeMenuItem?.isEnabled = state.currentState == .paid || studyMode.isActive
