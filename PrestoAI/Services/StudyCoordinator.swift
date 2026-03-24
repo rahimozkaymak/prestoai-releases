@@ -339,7 +339,7 @@ class StudyCoordinator: ObservableObject {
             guard let self = self else { return }
             guard let (cgImage, base64) = await self.captureScreen() else { return }
             guard self.isActive else { return }
-            let (compressed, _, _) = ImageCompressor.compressForStudy(base64)
+            let (compressed, _) = ImageCompressor.compress(base64)
             do {
                 let result = try await APIService.shared.identifyQuestions(
                     image: compressed,
@@ -376,7 +376,7 @@ class StudyCoordinator: ObservableObject {
             sessionMemory?.solvedQuestions = []
             isIdentifyInFlight = true
             defer { isIdentifyInFlight = false }
-            let (compressed, _, _) = ImageCompressor.compressForStudy(base64)
+            let (compressed, _) = ImageCompressor.compress(base64)
             do {
                 let result = try await APIService.shared.identifyQuestions(
                     image: compressed,

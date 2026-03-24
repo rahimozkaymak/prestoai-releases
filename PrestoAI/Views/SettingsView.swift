@@ -157,16 +157,20 @@ struct SettingsView: View {
                     Text("Study Mode")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(Theme.text2(colorScheme))
-                    Text(StudyModeManager.shared.isActive ? "Active" : "Inactive")
+                    Text(StudyCoordinator.shared.isActive ? "Active" : "Inactive")
                         .font(.system(size: 12))
-                        .foregroundColor(StudyModeManager.shared.isActive ? Color.green.opacity(0.8) : Theme.text4(colorScheme))
+                        .foregroundColor(StudyCoordinator.shared.isActive ? Color.green.opacity(0.8) : Theme.text4(colorScheme))
                 }
                 Spacer()
                 if stateManager.currentState == .paid {
                     Button(action: {
-                        StudyModeManager.shared.toggle()
+                        if StudyCoordinator.shared.isActive {
+                            StudyCoordinator.shared.endSession()
+                        } else {
+                            StudyCoordinator.shared.startSession()
+                        }
                     }) {
-                        Text(StudyModeManager.shared.isActive ? "Stop" : "Start")
+                        Text(StudyCoordinator.shared.isActive ? "Stop" : "Start")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(Theme.text2(colorScheme))
                             .padding(.horizontal, 14)
