@@ -230,6 +230,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
 
         menu.delegate = self
+        // Strip any auto-applied images synchronously before the menu is ever shown.
+        menu.items.forEach { $0.image = nil }
         statusBarItem?.menu = menu
 
         // Set initial dynamic state
