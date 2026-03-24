@@ -179,6 +179,10 @@ class StudyModeManager: ObservableObject {
 
         let summary = buildSessionSummary()
 
+        // Stop AutoSolve if it was running alongside Study Mode
+        print("[AutoSolve] Stopped by StudyMode deactivation")
+        AutoSolveManager.shared.deactivate()
+
         // Stop everything
         captureTimer?.invalidate()
         captureTimer = nil

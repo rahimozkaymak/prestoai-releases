@@ -16,6 +16,7 @@ class AutoSolveManager {
     @Published private(set) var isActive: Bool = false
 
     private var captureTimer: Timer?
+    private var captureTask: Task<Void, Never>?
     private var previousScreenshot: NSImage?
     private var sessionId: String = ""
     private var homeworkAccepted = false
@@ -59,12 +60,15 @@ class AutoSolveManager {
         guard isActive else { return }
         isActive = false
         state = .idle
+        captureTask?.cancel()
+        captureTask = nil
         stopCaptureTimer()
+        isRequestInFlight = false
         cornerBox.hide()
         previousScreenshot = nil
         homeworkAccepted = false
         onDeactivated?()
-        print("[AutoSolve] Deactivated")
+        print("[AutoSolve] Deactivated — all timers cancelled")
     }
 
     func togglePause() {
@@ -102,10 +106,13 @@ class AutoSolveManager {
     private var isRequestInFlight = false
 
     private func captureAndCompare() {
-        guard state == .scanning, !isRequestInFlight else { return }
+        guard isActive, state == .scanning, !isRequestInFlight else { return }
 
-        Task { @MainActor in
+        captureTask?.cancel()
+        captureTask = Task { @MainActor in
+            guard isActive else { return }
             guard let base64 = await captureScreen() else { return }
+            guard isActive else { return }
 
             guard let data = Data(base64Encoded: base64),
                   let currentImage = NSImage(data: data) else { return }
@@ -119,6 +126,7 @@ class AutoSolveManager {
                 }
             }
 
+            guard isActive else { return }
             previousScreenshot = currentImage
 
             state = .analyzing
@@ -139,6 +147,7 @@ class AutoSolveManager {
                 )
 
                 isRequestInFlight = false
+                guard isActive else { return }
                 backoffSeconds = 0
                 handleResponse(response)
             } catch {
