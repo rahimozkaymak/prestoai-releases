@@ -83,6 +83,8 @@ class StudyCoordinator: ObservableObject {
     // MARK: Modes
     private var autoSolveActive = false
     private var suggestionTimer: Timer?
+    private var isIdentifyComplete = false
+    private var pendingAutoSolve = false
 
     // MARK: OS Monitors
     private var captureTimer: Timer?
@@ -126,6 +128,7 @@ class StudyCoordinator: ObservableObject {
         let newSession = StudySession(id: UUID().uuidString, startedAt: Date())
         session = newSession
         sessionMemory = SessionMemory()
+        isIdentifyComplete = false; pendingAutoSolve = false
         isActive = true; isPaused = false; consecutiveDismissals = 0
         startOSMonitors(); startCaptureTimer(); startDurationTimer()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -153,7 +156,8 @@ class StudyCoordinator: ObservableObject {
         if let s = session { reportSessionEnd(s) }
         session = nil; sessionMemory = nil
         isActive = false; isPaused = false
-        isIdentifyInFlight = false; sessionDurationText = ""
+        isIdentifyInFlight = false; isIdentifyComplete = false; pendingAutoSolve = false
+        sessionDurationText = ""
         consecutiveDismissals = 0; isPrivateAppDetected = false
         onSessionEnded?(summary)
         print("[Coordinator] Session ended, memory cleared")
@@ -352,9 +356,16 @@ class StudyCoordinator: ObservableObject {
                 memory.globalContext = result.globalContext
                 memory.lastCGImage = cgImage
                 self.sessionMemory = memory
+                self.isIdentifyComplete = true
                 print("[Coordinator] Memory now has \(self.sessionMemory?.questions.count ?? 0) questions: \(self.sessionMemory?.questions.map { $0.id } ?? [])")
                 print("[Coordinator] Session started, \(result.questions.count) questions found, memory initialized")
-                if !self.autoSolveActive { self.startSuggestionTimer() }
+                if self.pendingAutoSolve {
+                    self.pendingAutoSolve = false
+                    print("[Coordinator] Running pending auto-solve now that identify is complete")
+                    self.performAutoSolve()
+                } else if !self.autoSolveActive {
+                    self.startSuggestionTimer()
+                }
             } catch {
                 print("[Coordinator] Initial identify failed: \(error)")
             }
@@ -449,6 +460,7 @@ class StudyCoordinator: ObservableObject {
     func toggleAutoSolve() {
         if autoSolveActive {
             autoSolveActive = false
+            pendingAutoSolve = false
             for t in solverTasks { t.cancel() }
             solverTasks.removeAll(); solversInFlight = 0
             pendingAutoSolveAnswers.removeAll()
@@ -458,7 +470,12 @@ class StudyCoordinator: ObservableObject {
         } else {
             autoSolveActive = true
             suggestionTimer?.invalidate(); suggestionTimer = nil
-            performAutoSolve()
+            if isIdentifyComplete {
+                performAutoSolve()
+            } else {
+                pendingAutoSolve = true
+                print("[Coordinator] Auto Solve ON — waiting for identify to complete")
+            }
             print("[Coordinator] Auto Solve ON — suggestions paused")
         }
     }
@@ -496,6 +513,7 @@ class StudyCoordinator: ObservableObject {
             }
         }
         guard autoSolveActive, let globalCtx = sessionMemory?.globalContext else { return }
+        print("[AutoSolve] Launching solver for Q\(q.id)")
         do {
             let result = try await APIService.shared.solveQuestion(
                 questionText: q.questionText,
@@ -505,12 +523,12 @@ class StudyCoordinator: ObservableObject {
                 deviceId: AppStateManager.shared.deviceID)
             guard autoSolveActive else { return }
             sessionMemory?.markSolved(q.id)
+            print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
             await MainActor.run { [weak self] in
                 self?.pendingAutoSolveAnswers.append((
                     id: q.id, latex: result.answerLatex,
                     copyable: result.answerCopyable, isMC: result.isMultipleChoice))
             }
-            print("[AutoSolve] Solver Q\(q.id) completed")
         } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }
     }
 
