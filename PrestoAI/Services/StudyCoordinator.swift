@@ -346,9 +346,12 @@ class StudyCoordinator: ObservableObject {
                     sessionId: self.session?.id ?? "",
                     deviceId: AppStateManager.shared.deviceID)
                 guard self.isActive else { return }
-                self.sessionMemory?.questions = result.questions
-                self.sessionMemory?.globalContext = result.globalContext
-                self.sessionMemory?.lastCGImage = cgImage
+                var memory = SessionMemory()
+                memory.questions = result.questions
+                memory.globalContext = result.globalContext
+                memory.lastCGImage = cgImage
+                self.sessionMemory = memory
+                print("[Coordinator] Memory now has \(self.sessionMemory?.questions.count ?? 0) questions: \(self.sessionMemory?.questions.map { $0.id } ?? [])")
                 print("[Coordinator] Session started, \(result.questions.count) questions found, memory initialized")
                 if !self.autoSolveActive { self.startSuggestionTimer() }
             } catch {
