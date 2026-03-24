@@ -105,7 +105,8 @@ class AutoSolveManager {
             let globalContext = result.globalContext
             for q in result.questions {
                 let task = Task { [weak self] in
-                    await self?.solveQuestion(
+                    guard let self = self else { return }
+                    await self.solveQuestion(
                         id: q.id,
                         questionText: q.questionText,
                         globalContext: globalContext,
