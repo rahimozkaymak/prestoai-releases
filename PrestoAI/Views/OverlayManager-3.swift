@@ -303,22 +303,29 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
-    // Encodes answers as a JSON array and calls setAllAutosolveAnswers(arr) in JS.
-    // The JS function uses buildAnswerRow (DOM methods, createTextNode) — no innerHTML.
-    func showAllAutoSolveAnswers(answers: [(id: String, latex: String, copyable: String, isMC: Bool, failed: Bool)]) {
+    // Rebuilds the full autosolve UI — header, page dividers, and all answer rows.
+    // Accepts AutoSolveAnswer structs directly; JSON encodes for safe JS transfer.
+    func showAllAutoSolveAnswers(answers: [AutoSolveAnswer], currentPage: Int) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.resizeForAutoSolveAnswers(count: answers.count)
+            let done = answers.filter { !$0.solving }.count
+            let total = answers.count
+            let headerText = total == 0
+                ? "Auto Solve — all solved"
+                : "Auto Solve — \(done)/\(total) answers • Page \(currentPage)"
             let payload: [[String: Any]] = answers.map {
-                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable, "isMC": $0.isMC, "failed": $0.failed]
+                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable,
+                 "isMC": $0.isMC, "failed": $0.failed, "solving": $0.solving, "page": $0.page]
             }
             guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-                  let jsonStr = String(data: jsonData, encoding: .utf8) else {
+                  let jsonStr = String(data: jsonData, encoding: .utf8),
+                  let hdrData = try? JSONSerialization.data(withJSONObject: headerText),
+                  let hdrStr = String(data: hdrData, encoding: .utf8) else {
                 print("[AutoSolve] Failed to encode answers as JSON"); return
             }
-            self.webView?.evaluateJavaScript("setAllAutosolveAnswers(\(jsonStr))") { _, error in
-                if let error = error { print("[AutoSolve] setAllAutosolveAnswers error: \(error)") }
-                else { print("[AutoSolve] Loaded \(answers.count) answers into overlay") }
+            self.webView?.evaluateJavaScript("refreshAutoSolveUI(\(hdrStr), \(jsonStr))") { _, error in
+                if let error = error { print("[AutoSolve] refreshAutoSolveUI error: \(error)") }
             }
         }
     }
@@ -1636,6 +1643,9 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         .as-copy-btn:hover, .as-resolve-btn:hover { opacity: 1; }
         .answer-row.error { opacity: 0.7; }
         .answer-error { flex: 1; font-size: 12px; color: #e6a817; font-style: italic; }
+        .answer-row.solving { opacity: 0.5; }
+        .answer-pending { flex: 1; font-size: 12px; color: var(--text-dim); font-style: italic; }
+        .page-divider { text-align: center; color: var(--text-dim); font-size: 11px; padding: 6px 0; border-top: 1px solid var(--subtle-bg); margin: 4px 0; }
         .study-btn.disabled-btn { opacity: 0.4; cursor: default; }
         """))
 
@@ -1820,19 +1830,29 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             document.querySelector('.content').style.display = '';
             document.getElementById('responseArea').classList.remove('visible');
         }
-        function buildAnswerRow(id, latex, copyable, isMC, failed) {
+        function buildAnswerRow(id, latex, copyable, isMC, failed, solving) {
             var div = document.createElement('div');
-            div.className = failed ? 'answer-row error' : 'answer-row';
+            div.className = solving ? 'answer-row solving' : (failed ? 'answer-row error' : 'answer-row');
             div.setAttribute('data-id', String(id));
             var qnum = document.createElement('span');
             qnum.className = 'q-num';
             qnum.textContent = id + ':';
             div.appendChild(qnum);
-            if (failed) {
+            if (solving) {
+                var pend = document.createElement('span');
+                pend.className = 'answer-pending';
+                pend.textContent = '\\u23F3 solving...';
+                div.appendChild(pend);
+            } else if (failed) {
                 var errSpan = document.createElement('span');
                 errSpan.className = 'answer-error';
                 errSpan.textContent = 'Failed \\u2014 tap to retry';
                 div.appendChild(errSpan);
+                var rb = document.createElement('button');
+                rb.className = 'as-resolve-btn';
+                rb.textContent = '\\u21BB';
+                (function(i) { rb.onclick = function() { resolveAnswer(i); }; })(id);
+                div.appendChild(rb);
             } else {
                 var ans = document.createElement('span');
                 ans.className = 'answer';
@@ -1846,22 +1866,22 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
                     (function(c) { cb.onclick = function() { copyAutoAnswer(c); }; })(copyable);
                     div.appendChild(cb);
                 }
+                var rb2 = document.createElement('button');
+                rb2.className = 'as-resolve-btn';
+                rb2.textContent = '\\u21BB';
+                (function(i) { rb2.onclick = function() { resolveAnswer(i); }; })(id);
+                div.appendChild(rb2);
             }
-            var rb = document.createElement('button');
-            rb.className = 'as-resolve-btn';
-            rb.textContent = '\\u21BB';
-            (function(i) { rb.onclick = function() { resolveAnswer(i); }; })(id);
-            div.appendChild(rb);
             return div;
         }
         function appendAutosolveAnswer(id, latex, copyable, isMC) {
-            var row = buildAnswerRow(id, latex, copyable, isMC);
+            var row = buildAnswerRow(id, latex, copyable, isMC, false, false);
             document.getElementById('autosolve-rows').appendChild(row);
             if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
         }
         function replaceAutosolveAnswer(id, latex, copyable, isMC) {
             var existing = document.querySelector('[data-id="' + id + '"]');
-            var row = buildAnswerRow(id, latex, copyable, isMC);
+            var row = buildAnswerRow(id, latex, copyable, isMC, false, false);
             if (existing) { existing.parentNode.replaceChild(row, existing); }
             else { document.getElementById('autosolve-rows').appendChild(row); }
             if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
@@ -1872,24 +1892,27 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         function resolveAnswer(id) {
             window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id:id});
         }
-        function setAllAutosolveAnswers(answers) {
+        function refreshAutoSolveUI(headerText, answers) {
+            document.getElementById('autosolve-panel').style.display = 'block';
+            document.querySelector('.content').style.display = 'none';
+            document.getElementById('responseArea').classList.add('visible');
+            document.getElementById('autosolve-header').textContent = headerText;
             var container = document.getElementById('autosolve-rows');
             container.textContent = '';
+            var lastPage = -1;
             for (var i = 0; i < answers.length; i++) {
                 var a = answers[i];
-                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC, a.failed));
+                if (a.page !== lastPage && lastPage !== -1) {
+                    var divider = document.createElement('div');
+                    divider.className = 'page-divider';
+                    divider.textContent = '\\u2500\\u2500 Page ' + a.page + ' \\u2500\\u2500';
+                    container.appendChild(divider);
+                }
+                lastPage = a.page;
+                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC, a.failed, a.solving));
             }
             if (window.MathJax && MathJax.typesetPromise) {
                 MathJax.typesetPromise([container]).catch(function(){});
-            }
-        }
-        function replaceAutosolveAnswerSafe(ans) {
-            var existing = document.querySelector('[data-id="' + ans.id + '"]');
-            var row = buildAnswerRow(ans.id, ans.latex, ans.copyable, ans.isMC, ans.failed);
-            if (existing) { existing.parentNode.replaceChild(row, existing); }
-            else { document.getElementById('autosolve-rows').appendChild(row); }
-            if (window.MathJax && MathJax.typesetPromise) {
-                MathJax.typesetPromise([row]).catch(function(){});
             }
         }
         </script>

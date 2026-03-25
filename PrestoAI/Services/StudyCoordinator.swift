@@ -52,6 +52,18 @@ struct PrivacyFilter {
     }
 }
 
+// MARK: - AutoSolveAnswer
+
+struct AutoSolveAnswer {
+    let id: String
+    var latex: String
+    var copyable: String
+    var isMC: Bool
+    var failed: Bool
+    var solving: Bool   // true = ⏳ placeholder while solver is in flight
+    var page: Int       // page batch (1 = initial, 2+ = detected page changes)
+}
+
 // MARK: - StudyCoordinator
 
 class StudyCoordinator: ObservableObject {
@@ -100,7 +112,13 @@ class StudyCoordinator: ObservableObject {
     // MARK: Auto Solve
     private var solverTasks: [Task<Void, Never>] = []
     private var solversInFlight = 0
-    private var pendingAutoSolveAnswers: [(id: String, latex: String, copyable: String, isMC: Bool, failed: Bool)] = []
+    private var solvedAnswers: [AutoSolveAnswer] = []
+
+    // MARK: Page Detection
+    private var pageCheckTimer: Timer?
+    private var isCheckingPage = false
+    private var currentPage = 1
+    private var previousPageScreenshot: CGImage?
 
     // MARK: Onboarding
     private var hasShownOnboarding: Bool {
@@ -129,6 +147,7 @@ class StudyCoordinator: ObservableObject {
         session = newSession
         sessionMemory = SessionMemory()
         isIdentifyComplete = false; pendingAutoSolve = false
+        currentPage = 1; previousPageScreenshot = nil; solvedAnswers = []
         isActive = true; isPaused = false; consecutiveDismissals = 0
         startOSMonitors(); startCaptureTimer(); startDurationTimer()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -151,12 +170,14 @@ class StudyCoordinator: ObservableObject {
         typingTimer?.invalidate(); typingTimer = nil
         if let m = keyEventMonitor { NSEvent.removeMonitor(m); keyEventMonitor = nil }
         if let o = appObserver { NSWorkspace.shared.notificationCenter.removeObserver(o); appObserver = nil }
+        pageCheckTimer?.invalidate(); pageCheckTimer = nil
         for t in solverTasks { t.cancel() }
         solverTasks.removeAll(); solversInFlight = 0; autoSolveActive = false
         if let s = session { reportSessionEnd(s) }
         session = nil; sessionMemory = nil
         isActive = false; isPaused = false
         isIdentifyInFlight = false; isIdentifyComplete = false; pendingAutoSolve = false
+        currentPage = 1; previousPageScreenshot = nil; solvedAnswers = []
         sessionDurationText = ""
         consecutiveDismissals = 0; isPrivateAppDetected = false
         onSessionEnded?(summary)
@@ -357,6 +378,7 @@ class StudyCoordinator: ObservableObject {
                 memory.lastCGImage = cgImage
                 self.sessionMemory = memory
                 self.isIdentifyComplete = true
+                self.previousPageScreenshot = cgImage  // baseline for page-change detection
                 print("[Coordinator] Memory now has \(self.sessionMemory?.questions.count ?? 0) questions: \(self.sessionMemory?.questions.map { $0.id } ?? [])")
                 print("[Coordinator] Session started, \(result.questions.count) questions found, memory initialized")
                 if self.pendingAutoSolve {
@@ -461,8 +483,8 @@ class StudyCoordinator: ObservableObject {
         if autoSolveActive {
             autoSolveActive = false
             pendingAutoSolve = false
-            // Don't cancel in-flight solvers — let them finish and show whatever answers arrive.
-            // Only cancel tasks in endSession().
+            pageCheckTimer?.invalidate(); pageCheckTimer = nil
+            // Don't cancel in-flight solvers — let them finish naturally.
             startSuggestionTimer()
             print("[Coordinator] Auto Solve OFF — in-flight solvers finishing naturally")
         } else {
@@ -474,7 +496,10 @@ class StudyCoordinator: ObservableObject {
                 pendingAutoSolve = true
                 print("[Coordinator] Auto Solve ON — waiting for identify to complete")
             }
-            print("[Coordinator] Auto Solve ON — suggestions paused")
+            pageCheckTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                Task { [weak self] in await self?.checkForPageChange() }
+            }
+            print("[Coordinator] Auto Solve ON — suggestions paused, page check every 5s")
         }
     }
 
@@ -482,11 +507,20 @@ class StudyCoordinator: ObservableObject {
         guard let mem = sessionMemory else { return }
         let unsolved = mem.questions.filter { !mem.solvedQuestions.contains($0.id) }
         guard !unsolved.isEmpty else {
-            overlayManager?.showAutoSolveResults(count: 0)
+            // Show "all solved" but keep any existing answers visible
+            renderOverlay()
             return
         }
-        pendingAutoSolveAnswers.removeAll()
-        overlayManager?.showAutoSolveResults(count: unsolved.count)
+        // Add ⏳ placeholder for each question not yet in the answer sheet
+        for q in unsolved {
+            if !solvedAnswers.contains(where: { $0.id == q.id }) {
+                solvedAnswers.append(AutoSolveAnswer(
+                    id: q.id, latex: "", copyable: "", isMC: false,
+                    failed: false, solving: true, page: currentPage))
+            }
+        }
+        renderOverlay()
+        overlayManager?.expandStudyBar()
         solversInFlight = unsolved.count
         for q in unsolved {
             let t = Task { [weak self] in
@@ -495,6 +529,11 @@ class StudyCoordinator: ObservableObject {
             }
             solverTasks.append(t)
         }
+    }
+
+    private func renderOverlay() {
+        let sorted = solvedAnswers.sorted { $0.id < $1.id }
+        overlayManager?.showAllAutoSolveAnswers(answers: sorted, currentPage: currentPage)
     }
 
     private func runSolver(q: APIService.IdentifiedQuestion) async {
@@ -515,35 +554,38 @@ class StudyCoordinator: ObservableObject {
                 answerBoxHint: q.answerBoxHint,
                 sessionId: session?.id ?? "",
                 deviceId: AppStateManager.shared.deviceID)
-            // Don't guard on autoSolveActive here — collect the answer even if user stopped.
+            // Don't guard on autoSolveActive — collect answer even if user stopped.
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.sessionMemory?.markSolved(q.id)
-                self.pendingAutoSolveAnswers.append((
-                    id: q.id, latex: result.answerLatex,
-                    copyable: result.answerCopyable, isMC: result.isMultipleChoice, failed: false))
-                print("[AutoSolve] Answer stored for Q\(q.id), total answers: \(self.pendingAutoSolveAnswers.count)")
-                let sorted = self.pendingAutoSolveAnswers.sorted { $0.id < $1.id }
-                self.overlayManager?.showAllAutoSolveAnswers(answers: sorted)
+                if let idx = self.solvedAnswers.firstIndex(where: { $0.id == q.id }) {
+                    self.solvedAnswers[idx].latex = result.answerLatex
+                    self.solvedAnswers[idx].copyable = result.answerCopyable
+                    self.solvedAnswers[idx].isMC = result.isMultipleChoice
+                    self.solvedAnswers[idx].solving = false
+                    self.solvedAnswers[idx].failed = false
+                }
+                print("[AutoSolve] Q\(q.id) stored, total: \(self.solvedAnswers.filter { !$0.solving }.count)")
+                self.renderOverlay()
             }
             print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
         } catch {
             print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)")
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                self.pendingAutoSolveAnswers.append((
-                    id: q.id, latex: "", copyable: "", isMC: false, failed: true))
-                let sorted = self.pendingAutoSolveAnswers.sorted { $0.id < $1.id }
-                self.overlayManager?.showAllAutoSolveAnswers(answers: sorted)
+                if let idx = self.solvedAnswers.firstIndex(where: { $0.id == q.id }) {
+                    self.solvedAnswers[idx].solving = false
+                    self.solvedAnswers[idx].failed = true
+                }
+                self.renderOverlay()
             }
         }
-        // All state mutations on MainActor — no background-thread read of shared arrays.
         await MainActor.run { [weak self] in
             guard let self = self else { return }
             self.solversInFlight = max(0, self.solversInFlight - 1)
             if self.solversInFlight == 0 {
                 self.solverTasks.removeAll()
-                print("[AutoSolve] All solvers done. \(self.pendingAutoSolveAnswers.count) answers loaded into overlay.")
+                print("[AutoSolve] All solvers done. \(self.solvedAnswers.count) answers in sheet.")
             }
         }
     }
@@ -552,6 +594,11 @@ class StudyCoordinator: ObservableObject {
         guard let q = sessionMemory?.questions.first(where: { $0.id == id }),
               let globalCtx = sessionMemory?.globalContext else { return }
         print("[AutoSolve] Re-solving Q\(id)")
+        if let idx = solvedAnswers.firstIndex(where: { $0.id == id }) {
+            solvedAnswers[idx].solving = true
+            solvedAnswers[idx].failed = false
+        }
+        renderOverlay()
         let t = Task { [weak self] in
             guard let self = self else { return }
             do {
@@ -562,12 +609,102 @@ class StudyCoordinator: ObservableObject {
                     sessionId: self.session?.id ?? "",
                     deviceId: AppStateManager.shared.deviceID)
                 await MainActor.run { [weak self] in
-                    self?.overlayManager?.replaceAutoSolveAnswer(
-                        id: id, latex: result.answerLatex,
-                        copyable: result.answerCopyable, isMC: result.isMultipleChoice)
+                    guard let self = self else { return }
+                    if let idx = self.solvedAnswers.firstIndex(where: { $0.id == id }) {
+                        self.solvedAnswers[idx].latex = result.answerLatex
+                        self.solvedAnswers[idx].copyable = result.answerCopyable
+                        self.solvedAnswers[idx].isMC = result.isMultipleChoice
+                        self.solvedAnswers[idx].solving = false
+                        self.solvedAnswers[idx].failed = false
+                    }
+                    self.renderOverlay()
                 }
-            } catch { print("[AutoSolve] Re-solve Q\(id) FAILED: \(error)") }
+            } catch {
+                print("[AutoSolve] Re-solve Q\(id) FAILED: \(error)")
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    if let idx = self.solvedAnswers.firstIndex(where: { $0.id == id }) {
+                        self.solvedAnswers[idx].solving = false
+                        self.solvedAnswers[idx].failed = true
+                    }
+                    self.renderOverlay()
+                }
+            }
         }
         solverTasks.append(t)
+    }
+
+    // MARK: - Page Detection
+
+    private func checkForPageChange() async {
+        guard isActive, autoSolveActive, !isCheckingPage else { return }
+        isCheckingPage = true
+        defer { isCheckingPage = false }
+
+        guard let (cgImage, base64) = await captureScreen() else { return }
+
+        guard let previous = previousPageScreenshot else {
+            previousPageScreenshot = cgImage
+            print("[PageCheck] First capture stored")
+            return
+        }
+
+        let similarity = frameSimilarity(previous, cgImage)
+        print("[PageCheck] similarity: \(String(format: "%.1f", similarity * 100))%, page: \(currentPage)")
+
+        guard similarity < 0.70 else { return }
+
+        print("[PageCheck] 🔄 NEW PAGE DETECTED")
+        previousPageScreenshot = cgImage
+        let newPage = currentPage + 1
+
+        let (compressed, _) = ImageCompressor.compress(base64)
+
+        do {
+            let result = try await APIService.shared.identifyQuestions(
+                image: compressed,
+                sessionId: session?.id ?? "",
+                deviceId: AppStateManager.shared.deviceID)
+
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.currentPage = newPage
+
+                let existingIds = Set(self.sessionMemory?.questions.map { $0.id } ?? [])
+                let newQuestions = result.questions.filter { !existingIds.contains($0.id) }
+
+                guard !newQuestions.isEmpty else {
+                    print("[PageCheck] No new questions on page \(self.currentPage)")
+                    return
+                }
+
+                print("[PageCheck] \(newQuestions.count) new questions: \(newQuestions.map { $0.id })")
+                self.sessionMemory?.questions.append(contentsOf: newQuestions)
+                if !result.globalContext.isEmpty {
+                    self.sessionMemory?.globalContext = result.globalContext
+                }
+
+                let pageCopy = self.currentPage
+                for q in newQuestions {
+                    if !self.solvedAnswers.contains(where: { $0.id == q.id }) {
+                        self.solvedAnswers.append(AutoSolveAnswer(
+                            id: q.id, latex: "", copyable: "", isMC: false,
+                            failed: false, solving: true, page: pageCopy))
+                    }
+                }
+                self.renderOverlay()
+
+                self.solversInFlight += newQuestions.count
+                for q in newQuestions {
+                    let t = Task { [weak self] in
+                        guard let self = self else { return }
+                        await self.runSolver(q: q)
+                    }
+                    self.solverTasks.append(t)
+                }
+            }
+        } catch {
+            print("[PageCheck] Identify failed: \(error)")
+        }
     }
 }
