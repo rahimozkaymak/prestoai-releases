@@ -100,7 +100,7 @@ class StudyCoordinator: ObservableObject {
     // MARK: Auto Solve
     private var solverTasks: [Task<Void, Never>] = []
     private var solversInFlight = 0
-    private var pendingAutoSolveAnswers: [(id: String, latex: String, copyable: String, isMC: Bool)] = []
+    private var pendingAutoSolveAnswers: [(id: String, latex: String, copyable: String, isMC: Bool, failed: Bool)] = []
 
     // MARK: Onboarding
     private var hasShownOnboarding: Bool {
@@ -521,14 +521,22 @@ class StudyCoordinator: ObservableObject {
                 self.sessionMemory?.markSolved(q.id)
                 self.pendingAutoSolveAnswers.append((
                     id: q.id, latex: result.answerLatex,
-                    copyable: result.answerCopyable, isMC: result.isMultipleChoice))
+                    copyable: result.answerCopyable, isMC: result.isMultipleChoice, failed: false))
                 print("[AutoSolve] Answer stored for Q\(q.id), total answers: \(self.pendingAutoSolveAnswers.count)")
-                // Incremental display — sorted by id so order is always 1A, 1B, 1C…
                 let sorted = self.pendingAutoSolveAnswers.sorted { $0.id < $1.id }
                 self.overlayManager?.showAllAutoSolveAnswers(answers: sorted)
             }
             print("[AutoSolve] Q\(q.id) solved: \(result.answerLatex.prefix(60))")
-        } catch { print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)") }
+        } catch {
+            print("[AutoSolve] Solver Q\(q.id) FAILED: \(error)")
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.pendingAutoSolveAnswers.append((
+                    id: q.id, latex: "", copyable: "", isMC: false, failed: true))
+                let sorted = self.pendingAutoSolveAnswers.sorted { $0.id < $1.id }
+                self.overlayManager?.showAllAutoSolveAnswers(answers: sorted)
+            }
+        }
         // All state mutations on MainActor — no background-thread read of shared arrays.
         await MainActor.run { [weak self] in
             guard let self = self else { return }

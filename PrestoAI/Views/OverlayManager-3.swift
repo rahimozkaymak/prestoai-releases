@@ -305,11 +305,12 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
 
     // Encodes answers as a JSON array and calls setAllAutosolveAnswers(arr) in JS.
     // The JS function uses buildAnswerRow (DOM methods, createTextNode) — no innerHTML.
-    func showAllAutoSolveAnswers(answers: [(id: String, latex: String, copyable: String, isMC: Bool)]) {
+    func showAllAutoSolveAnswers(answers: [(id: String, latex: String, copyable: String, isMC: Bool, failed: Bool)]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.resizeForAutoSolveAnswers(count: answers.count)
             let payload: [[String: Any]] = answers.map {
-                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable, "isMC": $0.isMC]
+                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable, "isMC": $0.isMC, "failed": $0.failed]
             }
             guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
                   let jsonStr = String(data: jsonData, encoding: .utf8) else {
@@ -322,10 +323,25 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
+    private func resizeForAutoSolveAnswers(count: Int) {
+        guard isStudyMode, let window = overlayWindow else { return }
+        let answerRowHeight: CGFloat = 44
+        let headerHeight: CGFloat = 50
+        let paddingHeight: CGFloat = 80
+        let contentHeight = headerHeight + (CGFloat(count) * answerRowHeight) + paddingHeight
+        let maxHeight = (NSScreen.main?.frame.height ?? 900) * 0.7
+        let newHeight = max(studyBarExpandedHeight, min(contentHeight, maxHeight))
+        guard abs(window.frame.height - newHeight) > 4 else { return }  // skip trivial changes
+        let frame = window.frame
+        window.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y,
+                               width: frame.width, height: newHeight),
+                        display: true, animate: true)
+    }
+
     func replaceAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let payload: [String: Any] = ["id": id, "latex": latex, "copyable": copyable, "isMC": isMC]
+            let payload: [String: Any] = ["id": id, "latex": latex, "copyable": copyable, "isMC": isMC, "failed": false]
             guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
                   let jsonStr = String(data: jsonData, encoding: .utf8) else { return }
             self.webView?.evaluateJavaScript("replaceAutosolveAnswerSafe(\(jsonStr))") { _, error in
@@ -1618,6 +1634,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         .answer { flex: 1; }
         .as-copy-btn, .as-resolve-btn { background: none; border: none; cursor: pointer; font-size: 12px; color: var(--text-dim); padding: 0 2px; opacity: 0.7; flex-shrink: 0; }
         .as-copy-btn:hover, .as-resolve-btn:hover { opacity: 1; }
+        .answer-row.error { opacity: 0.7; }
+        .answer-error { flex: 1; font-size: 12px; color: #e6a817; font-style: italic; }
         .study-btn.disabled-btn { opacity: 0.4; cursor: default; }
         """))
 
@@ -1802,25 +1820,32 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             document.querySelector('.content').style.display = '';
             document.getElementById('responseArea').classList.remove('visible');
         }
-        function buildAnswerRow(id, latex, copyable, isMC) {
+        function buildAnswerRow(id, latex, copyable, isMC, failed) {
             var div = document.createElement('div');
-            div.className = 'answer-row';
+            div.className = failed ? 'answer-row error' : 'answer-row';
             div.setAttribute('data-id', String(id));
             var qnum = document.createElement('span');
             qnum.className = 'q-num';
             qnum.textContent = id + ':';
-            var ans = document.createElement('span');
-            ans.className = 'answer';
-            var mathNode = document.createTextNode('\\\\(' + latex + '\\\\)');
-            ans.appendChild(mathNode);
             div.appendChild(qnum);
-            div.appendChild(ans);
-            if (!isMC) {
-                var cb = document.createElement('button');
-                cb.className = 'as-copy-btn';
-                cb.textContent = '\\uD83D\\uDCCB';
-                (function(c) { cb.onclick = function() { copyAutoAnswer(c); }; })(copyable);
-                div.appendChild(cb);
+            if (failed) {
+                var errSpan = document.createElement('span');
+                errSpan.className = 'answer-error';
+                errSpan.textContent = 'Failed \\u2014 tap to retry';
+                div.appendChild(errSpan);
+            } else {
+                var ans = document.createElement('span');
+                ans.className = 'answer';
+                var mathNode = document.createTextNode('\\\\(' + latex + '\\\\)');
+                ans.appendChild(mathNode);
+                div.appendChild(ans);
+                if (!isMC) {
+                    var cb = document.createElement('button');
+                    cb.className = 'as-copy-btn';
+                    cb.textContent = '\\uD83D\\uDCCB';
+                    (function(c) { cb.onclick = function() { copyAutoAnswer(c); }; })(copyable);
+                    div.appendChild(cb);
+                }
             }
             var rb = document.createElement('button');
             rb.className = 'as-resolve-btn';
@@ -1852,7 +1877,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             container.textContent = '';
             for (var i = 0; i < answers.length; i++) {
                 var a = answers[i];
-                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC));
+                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC, a.failed));
             }
             if (window.MathJax && MathJax.typesetPromise) {
                 MathJax.typesetPromise([container]).catch(function(){});
@@ -1860,7 +1885,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
         function replaceAutosolveAnswerSafe(ans) {
             var existing = document.querySelector('[data-id="' + ans.id + '"]');
-            var row = buildAnswerRow(ans.id, ans.latex, ans.copyable, ans.isMC);
+            var row = buildAnswerRow(ans.id, ans.latex, ans.copyable, ans.isMC, ans.failed);
             if (existing) { existing.parentNode.replaceChild(row, existing); }
             else { document.getElementById('autosolve-rows').appendChild(row); }
             if (window.MathJax && MathJax.typesetPromise) {
