@@ -102,8 +102,8 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
 
                     Text("Unlimited analyses · \(stateManager.cachedPrice)")
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.text4(colorScheme))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.text2(colorScheme))
 
                     if stateManager.accessToken == nil {
                         Button(action: { onSignIn?() ?? onUpgrade?() }) {
