@@ -599,6 +599,8 @@ class UpgradePromptController {
 class AccountViewController {
     private var window: NSWindow?
 
+    var onBack: (() -> Void)?
+
     func show(openPromoField: Bool = false, showBackButton: Bool = false, onSuccess: @escaping (String) -> Void) {
         let view = AccountView(onSuccess: { jwt in
             self.window?.close()
@@ -607,6 +609,7 @@ class AccountViewController {
         }, openPromoField: openPromoField, showBackButton: showBackButton, onBack: { [weak self] in
             self?.window?.close()
             self?.window = nil
+            self?.onBack?()
         })
         
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Account")

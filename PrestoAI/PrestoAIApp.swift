@@ -950,6 +950,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     
     private func showAccountCreation(openPromoField: Bool = false, showBackButton: Bool = false) {
         accountViewController = AccountViewController()
+        if showBackButton {
+            accountViewController?.onBack = { [weak self] in
+                self?.openSettings()
+            }
+        }
         accountViewController?.show(openPromoField: openPromoField, showBackButton: showBackButton) { [weak self] jwt in
             self?.handlePostLogin(jwt: jwt)
         }
