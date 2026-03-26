@@ -162,7 +162,7 @@ struct SettingsView: View {
                     Text("Default Prompt")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Theme.text4(colorScheme))
-                    Text("Sent with every screenshot analysis")
+                    Text("Sent with every analysis. Edit it to match how you like your answers.")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.text4(colorScheme))
                 }
