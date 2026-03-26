@@ -118,7 +118,7 @@ struct AccountView: View {
             }
         }
         .padding(32)
-        .frame(width: 420, height: 460)
+        .frame(width: 420, height: 420)
         .background(Theme.bg(colorScheme))
         .onAppear { showPromoField = openPromoField }
     }
@@ -604,7 +604,7 @@ class AccountViewController {
             onSuccess(jwt)
         }, openPromoField: openPromoField)
         
-        let panel = makePrestoPanel(size: NSSize(width: 420, height: 460), title: "Account")
+        let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Account")
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
