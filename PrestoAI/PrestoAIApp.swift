@@ -810,9 +810,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func openSettings() { openSettings(initialTab: .settings) }
+    @objc private func openSettings() { showSettings(initialTab: .settings) }
 
-    private func openSettings(initialTab: SettingsTab) {
+    private func showSettings(initialTab: SettingsTab) {
         if let existing = settingsPanel, existing.isVisible {
             existing.close()
         }
@@ -952,7 +952,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accountViewController = AccountViewController()
         if showBackButton {
             accountViewController?.onBack = { [weak self] in
-                self?.openSettings(initialTab: .myAccount)
+                self?.showSettings(initialTab: .myAccount)
             }
         }
         accountViewController?.show(openPromoField: openPromoField, showBackButton: showBackButton) { [weak self] jwt in
