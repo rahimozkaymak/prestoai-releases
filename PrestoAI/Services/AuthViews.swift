@@ -99,9 +99,12 @@ struct AccountView: View {
     var body: some View {
         VStack(spacing: 20) {
             VStack(spacing: 8) {
-                Image(systemName: "person.circle.fill")
-                    .font(.system(size: 44))
-                    .foregroundColor(Theme.text1(colorScheme))
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 Text(showEmailForm ? (isSignIn ? "Sign In" : "Create Account") : "Continue with")
                     .font(.system(size: 22, weight: .semibold))
@@ -131,17 +134,16 @@ struct AccountView: View {
                 handleAppleSignIn(result)
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(width: 300, height: 48)
+            .frame(width: 280, height: 44)
             .cornerRadius(8)
 
             // Sign in with Google — custom styled button
             Button(action: handleGoogleSignIn) {
                 HStack(spacing: 10) {
-                    // Google "G" logo approximation
                     Text("G")
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 22, height: 22)
                         .background(
                             LinearGradient(
                                 colors: [.red, .yellow, .green, .blue],
@@ -150,10 +152,10 @@ struct AccountView: View {
                         )
                         .cornerRadius(4)
                     Text("Sign in with Google")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundColor(Theme.text1(colorScheme))
                 }
-                .frame(width: 300, height: 48)
+                .frame(width: 280, height: 44)
                 .background(Theme.inputBg(colorScheme))
                 .cornerRadius(8)
                 .overlay(
@@ -181,18 +183,18 @@ struct AccountView: View {
             HStack {
                 Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
                 Text("or")
-                    .font(.system(size: 12))
-                    .foregroundColor(Theme.text3(colorScheme))
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.text4(colorScheme))
                 Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
             }
-            .frame(width: 300)
-            .padding(.vertical, 4)
+            .frame(width: 280)
+            .padding(.vertical, 2)
 
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showEmailForm = true } }) {
                 Text("Continue with email")
-                    .font(.system(size: 14))
-                    .foregroundColor(Theme.text2(colorScheme))
-                    .frame(width: 300, height: 40)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .frame(width: 280, height: 44)
                     .background(Theme.inputBg(colorScheme))
                     .cornerRadius(8)
             }
@@ -201,7 +203,7 @@ struct AccountView: View {
             if showPromoField {
                 TextField("Enter code", text: $promoCode)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundColor(Theme.text1(colorScheme))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 6)
@@ -209,12 +211,12 @@ struct AccountView: View {
                     .background(Theme.subtleBorder(colorScheme))
                     .cornerRadius(5)
                     .autocorrectionDisabled()
-                    .frame(width: 160, height: 20)
+                    .frame(width: 140, height: 20)
             } else {
                 Button(action: { showPromoField = true }) {
                     Text("I have a code")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.text3(colorScheme))
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
             }
@@ -603,6 +605,7 @@ class AccountViewController {
         }, openPromoField: openPromoField)
         
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 460), title: "Account")
+        panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
