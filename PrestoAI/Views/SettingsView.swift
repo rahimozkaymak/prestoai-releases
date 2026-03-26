@@ -67,19 +67,13 @@ struct SettingsView: View {
     private var myAccountContent: some View {
         VStack(spacing: 0) {
             VStack(spacing: 6) {
-                if stateManager.currentState == .paid {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .frame(width: 52, height: 52)
-                        .colorMultiply(Color(red: 1.0, green: 0.78, blue: 0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                } else {
-                    Image(systemName: "person.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(Theme.text1(colorScheme))
-                }
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 52, height: 52)
+                    .colorMultiply(stateManager.currentState == .paid ? Color(red: 1.0, green: 0.78, blue: 0.08) : .white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Text(stateManager.currentState == .paid ? "Pro Account" : "Free Tier")
                     .font(.system(size: 22, weight: .semibold))
