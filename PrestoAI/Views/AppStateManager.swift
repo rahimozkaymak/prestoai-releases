@@ -17,8 +17,8 @@ class AppStateManager: ObservableObject {
     static let shared = AppStateManager()
     
     @Published private(set) var currentState: AppState = .freeActive
-    @Published private(set) var queriesRemaining: Int = 5
-    @Published private(set) var totalFreeQueries: Int = 5
+    @Published private(set) var queriesRemaining: Int = 10
+    @Published private(set) var totalFreeQueries: Int = 10
     @Published private(set) var isOffline: Bool = false
     @Published var cachedPrice: String = "$5.99/month"
     
