@@ -810,15 +810,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func openSettings() {
+    @objc private func openSettings() { openSettings(initialTab: .settings) }
+
+    private func openSettings(initialTab: SettingsTab) {
         if let existing = settingsPanel, existing.isVisible {
-            existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+            existing.close()
         }
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Settings")
         panel.hidesOnDeactivate = false
-        panel.contentView = NSHostingView(rootView: SettingsView(initialTab: .settings, onUpgrade: { [weak panel] in
+        panel.contentView = NSHostingView(rootView: SettingsView(initialTab: initialTab, onUpgrade: { [weak panel] in
             panel?.orderOut(nil)
             self.showAccountCreation()
         }, onSignIn: { [weak panel] in
@@ -952,7 +952,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accountViewController = AccountViewController()
         if showBackButton {
             accountViewController?.onBack = { [weak self] in
-                self?.openSettings()
+                self?.openSettings(initialTab: .myAccount)
             }
         }
         accountViewController?.show(openPromoField: openPromoField, showBackButton: showBackButton) { [weak self] jwt in
