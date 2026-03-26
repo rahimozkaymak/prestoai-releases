@@ -16,10 +16,12 @@ struct SettingsView: View {
     @Environment(\.colorScheme) var colorScheme
 
     var onUpgrade: (() -> Void)?
+    var onSignIn: (() -> Void)?
 
-    init(initialTab: SettingsTab = .settings, onUpgrade: (() -> Void)? = nil) {
+    init(initialTab: SettingsTab = .settings, onUpgrade: (() -> Void)? = nil, onSignIn: (() -> Void)? = nil) {
         _selectedTab = State(initialValue: initialTab)
         self.onUpgrade = onUpgrade
+        self.onSignIn = onSignIn
     }
 
     var body: some View {
@@ -90,6 +92,21 @@ struct SettingsView: View {
             }
             .padding(.top, 28)
             .padding(.bottom, 20)
+
+            // Sign In (for users not logged in)
+            if stateManager.accessToken == nil {
+                Button(action: { onSignIn?() ?? onUpgrade?() }) {
+                    Text("Sign In")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Theme.text2(colorScheme))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Theme.subtleBg(colorScheme))
+                        .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 8)
+            }
 
             // Upgrade CTA (free users)
             if stateManager.currentState != .paid {
