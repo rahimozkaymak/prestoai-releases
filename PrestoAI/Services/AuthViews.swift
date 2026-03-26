@@ -222,27 +222,6 @@ struct AccountView: View {
                     .cornerRadius(8)
             }
             .buttonStyle(.plain)
-
-            if showPromoField {
-                TextField("Enter code", text: $promoCode)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.text1(colorScheme))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(Theme.subtleBorder(colorScheme))
-                    .cornerRadius(5)
-                    .autocorrectionDisabled()
-                    .frame(width: 140, height: 20)
-            } else {
-                Button(action: { showPromoField = true }) {
-                    Text("I have a code")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.text4(colorScheme))
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
