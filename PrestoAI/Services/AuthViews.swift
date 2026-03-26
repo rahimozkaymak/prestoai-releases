@@ -125,45 +125,30 @@ struct AccountView: View {
 
     // MARK: - Social Auth (Primary)
 
-    private var socialAuthSection: some View {
-        VStack(spacing: 12) {
-            // Sign in with Apple — native button
-            SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = [.email, .fullName]
-            } onCompletion: { result in
-                handleAppleSignIn(result)
+    private func authButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                Text(label)
+                    .font(.system(size: 14, weight: .medium))
             }
-            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .foregroundColor(Theme.text1(colorScheme))
             .frame(width: 280, height: 44)
+            .background(Theme.inputBg(colorScheme))
             .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Theme.border(colorScheme), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
 
-            // Sign in with Google — custom styled button
-            Button(action: handleGoogleSignIn) {
-                HStack(spacing: 10) {
-                    Text("G")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .frame(width: 22, height: 22)
-                        .background(
-                            LinearGradient(
-                                colors: [.red, .yellow, .green, .blue],
-                                startPoint: .topLeading, endPoint: .bottomTrailing
-                            )
-                        )
-                        .cornerRadius(4)
-                    Text("Sign in with Google")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Theme.text1(colorScheme))
-                }
-                .frame(width: 280, height: 44)
-                .background(Theme.inputBg(colorScheme))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Theme.border(colorScheme), lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
+    private var socialAuthSection: some View {
+        VStack(spacing: 10) {
+            authButton(icon: "apple.logo", label: "Continue with Apple", action: triggerAppleSignIn)
+            authButton(icon: "g.circle.fill", label: "Continue with Google", action: handleGoogleSignIn)
 
             if isLoading {
                 ProgressView()
@@ -344,6 +329,23 @@ struct AccountView: View {
     }
 
     // MARK: - Apple Sign-In
+
+    private func triggerAppleSignIn() {
+        let provider = ASAuthorizationAppleIDProvider()
+        let request = provider.createRequest()
+        request.requestedScopes = [.email, .fullName]
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        let delegate = AppleSignInDelegate { result in
+            handleAppleSignIn(result)
+        }
+        // Store delegate to keep it alive
+        _appleSignInDelegate = delegate
+        controller.delegate = delegate
+        controller.performRequests()
+    }
+
+    // Hold a strong reference so the delegate isn't deallocated
+    @State private var _appleSignInDelegate: AppleSignInDelegate?
 
     private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
         switch result {
@@ -925,5 +927,23 @@ struct PasswordResetView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Apple Sign-In Delegate (programmatic, no SwiftUI button)
+
+class AppleSignInDelegate: NSObject, ASAuthorizationControllerDelegate {
+    private let completion: (Result<ASAuthorization, Error>) -> Void
+
+    init(completion: @escaping (Result<ASAuthorization, Error>) -> Void) {
+        self.completion = completion
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        completion(.success(authorization))
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        completion(.failure(error))
     }
 }
