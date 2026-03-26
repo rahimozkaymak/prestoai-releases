@@ -232,18 +232,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "Refer 3 Friends — Get a Free Month", action: #selector(openReferral), keyEquivalent: ""))
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Sparkle "Check for Updates..." menu item
-        let checkForUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
-        checkForUpdatesItem.target = updaterController
-        menu.addItem(checkForUpdatesItem)
-
         // "Settings" title triggers macOS auto-gear; use "Preferences" to avoid it.
         menu.addItem(NSMenuItem(title: "Preferences", action: #selector(openSettings), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Feedback", action: #selector(openFeedback), keyEquivalent: ""))
         let quitItem = NSMenuItem(title: "Quit Presto AI", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
 
@@ -591,6 +581,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }, onSignIn: { [weak panel] in
             panel?.orderOut(nil)
             self.showAccountCreation()
+        }, onCheckForUpdates: { [weak self] in
+            self?.updaterController.checkForUpdates(nil)
+        }, onFeedback: { [weak panel, weak self] in
+            panel?.orderOut(nil)
+            self?.openFeedback()
+        }, onReferral: { [weak panel, weak self] in
+            panel?.orderOut(nil)
+            self?.openReferral()
         }))
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -826,6 +824,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }, onSignIn: { [weak panel] in
             panel?.orderOut(nil)
             self.showAccountCreation()
+        }, onCheckForUpdates: { [weak self] in
+            self?.updaterController.checkForUpdates(nil)
+        }, onFeedback: { [weak panel, weak self] in
+            panel?.orderOut(nil)
+            self?.openFeedback()
+        }, onReferral: { [weak panel, weak self] in
+            panel?.orderOut(nil)
+            self?.openReferral()
         }))
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

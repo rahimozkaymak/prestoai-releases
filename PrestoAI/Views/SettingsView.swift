@@ -16,11 +16,17 @@ struct SettingsView: View {
 
     var onUpgrade: (() -> Void)?
     var onSignIn: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
+    var onFeedback: (() -> Void)?
+    var onReferral: (() -> Void)?
 
-    init(initialTab: SettingsTab = .settings, onUpgrade: (() -> Void)? = nil, onSignIn: (() -> Void)? = nil) {
+    init(initialTab: SettingsTab = .settings, onUpgrade: (() -> Void)? = nil, onSignIn: (() -> Void)? = nil, onCheckForUpdates: (() -> Void)? = nil, onFeedback: (() -> Void)? = nil, onReferral: (() -> Void)? = nil) {
         _selectedTab = State(initialValue: initialTab)
         self.onUpgrade = onUpgrade
         self.onSignIn = onSignIn
+        self.onCheckForUpdates = onCheckForUpdates
+        self.onFeedback = onFeedback
+        self.onReferral = onReferral
     }
 
     var body: some View {
@@ -114,6 +120,14 @@ struct SettingsView: View {
                 }
                 .padding(.bottom, 20)
             }
+
+            // Refer a Friend
+            Button(action: { onReferral?() }) {
+                Text("Refer a Friend — Get a Free Month")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.text4(colorScheme))
+            }
+            .buttonStyle(.plain)
 
             // Manage Subscription + Sign Out (paid users)
             if stateManager.currentState == .paid {
@@ -210,10 +224,20 @@ struct SettingsView: View {
             .cornerRadius(8)
             .padding(.top, 16)
 
-            Button(action: {
-                NotificationCenter.default.post(name: .rerunSetupWizard, object: nil)
-            }) {
-                Text("Run Setup Again")
+            Button(action: { onCheckForUpdates?() }) {
+                Text("Check for Updates…")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Theme.text2(colorScheme))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Theme.subtleBg(colorScheme))
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+
+            Button(action: { onFeedback?() }) {
+                Text("Send Feedback")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Theme.text2(colorScheme))
                     .frame(maxWidth: .infinity)
