@@ -13,7 +13,7 @@ enum GoogleSignInHelper {
     // TODO: Replace with your actual Google OAuth credentials.
     // The client secret should ideally live on your backend — the macOS app
     // sends the auth code to your backend, which exchanges it for tokens.
-    private static let clientID = "REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+    private static let clientID = "70849278014-j7tv2n561dg84rjjes2el6ufupph1198.apps.googleusercontent.com"
     private static let redirectURI = "http://127.0.0.1:9004/callback"
     private static let callbackPort: UInt16 = 9004
 
