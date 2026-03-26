@@ -136,13 +136,6 @@ class StudyCoordinator: ObservableObject {
     }
 
     // MARK: Settings
-    var captureInterval: TimeInterval {
-        let v = UserDefaults.standard.double(forKey: "studyModeCaptureInterval")
-        return v > 0 ? v : 45
-    }
-    var userExcludedApps: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: "studyModeExcludedApps") ?? [])
-    }
 
     private var detectInterval: TimeInterval {
         currentMode == .solve ? 3.0 : 5.0
@@ -163,7 +156,7 @@ class StudyCoordinator: ObservableObject {
         contentDetector.reset()
         solverEngine.sessionId = newSession.id
         solverEngine.cancelAll()
-        privacyFilter.userExclusions = userExcludedApps
+        privacyFilter.userExclusions = []
         currentMode = .learn
         isIdentifyComplete = false
         pendingAutoSolve = false
@@ -348,7 +341,7 @@ class StudyCoordinator: ObservableObject {
         guard isActive, !isPaused else { return }
         session?.appsVisited.insert(appName)
         let title = getCurrentWindowTitle()
-        if PrivacyFilter.isExcluded(appName: appName, windowTitle: title, userExclusions: userExcludedApps) {
+        if PrivacyFilter.isExcluded(appName: appName, windowTitle: title, userExclusions: []) {
             isPrivateAppDetected = true
             overlayManager?.updateStudyStatus(text: "Paused — private app", dotState: "paused")
             return

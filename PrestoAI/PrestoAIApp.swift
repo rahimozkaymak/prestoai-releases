@@ -585,7 +585,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 520), title: "Settings")
         panel.hidesOnDeactivate = false
-        panel.contentView = NSHostingView(rootView: SettingsView(initialTab: .studyMode, onUpgrade: { [weak panel] in
+        panel.contentView = NSHostingView(rootView: SettingsView(initialTab: .settings, onUpgrade: { [weak panel] in
             panel?.orderOut(nil)
             self.showAccountCreation()
         }, onSignIn: { [weak panel] in
