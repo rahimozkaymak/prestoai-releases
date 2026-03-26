@@ -93,21 +93,6 @@ struct SettingsView: View {
             .padding(.top, 28)
             .padding(.bottom, 20)
 
-            // Sign In (for users not logged in)
-            if stateManager.accessToken == nil {
-                Button(action: { onSignIn?() ?? onUpgrade?() }) {
-                    Text("Sign In")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Theme.text2(colorScheme))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                        .background(Theme.subtleBg(colorScheme))
-                        .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, 8)
-            }
-
             // Upgrade CTA (free users)
             if stateManager.currentState != .paid {
                 VStack(spacing: 8) {
@@ -125,6 +110,16 @@ struct SettingsView: View {
                     Text("Unlimited analyses · \(stateManager.cachedPrice)")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.text4(colorScheme))
+
+                    if stateManager.accessToken == nil {
+                        Button(action: { onSignIn?() ?? onUpgrade?() }) {
+                            Text("Already have an account? Sign in")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.text4(colorScheme))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                    }
                 }
                 .padding(.bottom, 20)
             }
