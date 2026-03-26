@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import IOKit
+import CommonCrypto
 
 // MARK: - App State Enum
 
@@ -47,6 +49,28 @@ class AppStateManager: ObservableObject {
         return newID
     }
     
+    // MARK: - Hardware Fingerprint (anti-abuse)
+
+    /// SHA-256 hash of the machine's IOPlatformUUID. Survives reinstalls, Keychain wipes,
+    /// and user account changes. Sent as X-HW-Fingerprint header for server-side dedup.
+    lazy var hardwareFingerprint: String = {
+        var fingerprint = "unknown"
+        let service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        if service != 0 {
+            if let uuidData = IORegistryEntryCreateCFProperty(service, "IOPlatformUUID" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String {
+                // Hash it so we never send the raw hardware UUID
+                let data = Data(uuidData.utf8)
+                var hash = [UInt8](repeating: 0, count: 32)
+                data.withUnsafeBytes { buffer in
+                    CC_SHA256(buffer.baseAddress, CC_LONG(buffer.count), &hash)
+                }
+                fingerprint = hash.map { String(format: "%02x", $0) }.joined()
+            }
+            IOObjectRelease(service)
+        }
+        return fingerprint
+    }()
+
     // MARK: - Token Management (single source of truth)
     
     /// Current access token, or nil if not logged in.

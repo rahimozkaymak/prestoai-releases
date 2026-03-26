@@ -261,7 +261,8 @@ class APIService {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue(deviceID, forHTTPHeaderField: "X-Device-ID")
-            
+            request.setValue(AppStateManager.shared.hardwareFingerprint, forHTTPHeaderField: "X-HW-Fingerprint")
+
             if let token = self.accessToken {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
@@ -304,7 +305,8 @@ class APIService {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(deviceID, forHTTPHeaderField: "X-Device-ID")
-        
+        request.setValue(AppStateManager.shared.hardwareFingerprint, forHTTPHeaderField: "X-HW-Fingerprint")
+
         let (data, response) = try await URLSession.shared.data(for: request)
         try handleResponse(response, data: data)
         return try JSONDecoder().decode(DeviceStatus.self, from: data)
