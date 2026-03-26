@@ -238,8 +238,24 @@ class APIService {
         }
     }
     
+    // MARK: - Text-Only Streaming (Learn mode fast path)
+
+    func sendTextOnly(
+        prompt: String,
+        onChunk: @escaping (String) -> Void,
+        onComplete: @escaping (Int, String) -> Void,
+        onError: @escaping (Error) -> Void = { _ in }
+    ) {
+        // Use the existing /api/analyze endpoint with a tiny 1x1 transparent PNG
+        // This avoids creating a new backend endpoint — the analyze endpoint works with any image
+        let tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+
+        sendScreenshot(tinyPNG, prompt: prompt, skipCompression: true,
+                       onChunk: onChunk, onComplete: onComplete, onError: onError)
+    }
+
     // MARK: - Device & Auth Status
-    
+
     func checkDeviceStatus(deviceID: String) async throws -> DeviceStatus {
         let urlStr = baseURL + "/api/device/status?device_id=\(deviceID)"
         print("[API] GET \(urlStr)")
@@ -398,8 +414,319 @@ class APIService {
         try await post(endpoint: "/api/feedback", body: body, authenticated: false)
     }
 
+    // MARK: - Study Mode V2 Endpoints
+
+    struct StudyIdentifyResponse {
+        let globalContext: String
+        let documentType: DocumentType
+        let questions: [StudyIdentifiedQuestion]
+        let pageSummary: String
+    }
+
+    struct StudyIdentifiedQuestion {
+        let id: String
+        let questionText: String
+        let answerBoxHint: String?
+        let questionType: QuestionType
+        let topic: String?
+        let estimatedDifficulty: Difficulty?
+        let positionOnPage: Int
+    }
+
+    struct StudySolveResponse {
+        let answerLatex: String
+        let answerCopyable: String
+        let isMultipleChoice: Bool
+        let multipleChoiceLetter: String?
+        let confidence: Double
+        let topic: String?
+        let steps: [StudySolutionStep]?
+    }
+
+    struct StudySolutionStep {
+        let stepNumber: Int
+        let latex: String
+        let explanation: String
+        let isKeyStep: Bool
+    }
+
+    struct StudyExplainResponse {
+        let conceptName: String
+        let conceptExplanation: String
+        let formulaLatex: String?
+        let strategy: String?
+        let similarExample: StudySimilarExample?
+        let commonMistakes: [String]
+    }
+
+    struct StudySimilarExample {
+        let problemLatex: String
+        let solutionLatex: String
+        let steps: [StudySolutionStep]
+    }
+
+    struct StudyCheckResponse {
+        let isCorrect: Bool
+        let correctnessPercentage: Int
+        let feedback: String
+        let errorStep: Int?
+        let errorType: String?
+        let correctFromError: String?
+        let encouragement: String?
+    }
+
+    /// POST /api/v1/study/identify
+    func studyIdentify(
+        image: String,
+        ocrPreview: String,
+        sessionId: String,
+        pageNumber: Int,
+        existingQuestionIds: [String]
+    ) async throws -> StudyIdentifyResponse {
+        let body: [String: Any] = [
+            "image_base64": image,
+            "ocr_preview": ocrPreview,
+            "session_id": sessionId,
+            "page_number": pageNumber,
+            "existing_question_ids": existingQuestionIds,
+            "user_id": AppStateManager.shared.deviceID
+        ]
+        let data = try await post(endpoint: "/api/v1/study/identify", body: body)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid identify response")
+        }
+
+        let globalContext = json["global_context"] as? String ?? ""
+        let docTypeStr = json["document_type"] as? String ?? "unknown"
+        let documentType = DocumentType(rawValue: docTypeStr) ?? .unknown
+        let pageSummary = json["page_summary"] as? String ?? ""
+
+        var questions: [StudyIdentifiedQuestion] = []
+        if let arr = json["questions"] as? [[String: Any]] {
+            for (index, item) in arr.enumerated() {
+                let rawId = item["id"]
+                let id: String
+                if let s = rawId as? String { id = s }
+                else if let n = rawId as? Int { id = String(n) }
+                else { continue }
+                guard let qText = item["question_text"] as? String else { continue }
+                let hint = item["answer_box_hint"] as? String
+                let qtStr = item["question_type"] as? String ?? "free_response"
+                let qt = QuestionType(rawValue: qtStr) ?? .freeResponse
+                let topic = item["topic"] as? String
+                let diffStr = item["estimated_difficulty"] as? String
+                let diff = diffStr.flatMap { Difficulty(rawValue: $0) }
+                let pos = item["position_on_page"] as? Int ?? index + 1
+
+                questions.append(StudyIdentifiedQuestion(
+                    id: id, questionText: qText, answerBoxHint: hint,
+                    questionType: qt, topic: topic, estimatedDifficulty: diff,
+                    positionOnPage: pos
+                ))
+            }
+        }
+
+        return StudyIdentifyResponse(
+            globalContext: globalContext,
+            documentType: documentType,
+            questions: questions,
+            pageSummary: pageSummary
+        )
+    }
+
+    /// POST /api/v1/study/solve
+    func studySolve(
+        sessionId: String,
+        questionId: String,
+        questionText: String,
+        globalContext: String,
+        answerBoxHint: String?,
+        questionType: QuestionType,
+        neighboringQuestions: [String],
+        includeSteps: Bool
+    ) async throws -> StudySolveResponse {
+        var body: [String: Any] = [
+            "session_id": sessionId,
+            "question_id": questionId,
+            "question_text": questionText,
+            "global_context": globalContext,
+            "question_type": questionType.rawValue,
+            "neighboring_questions": neighboringQuestions,
+            "mode": "solve",
+            "include_steps": includeSteps,
+            "user_id": AppStateManager.shared.deviceID
+        ]
+        if let hint = answerBoxHint { body["answer_box_hint"] = hint }
+
+        let data = try await post(endpoint: "/api/v1/study/solve", body: body)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid solve response")
+        }
+
+        var steps: [StudySolutionStep]? = nil
+        if let stepsArr = json["steps"] as? [[String: Any]] {
+            steps = stepsArr.map { s in
+                StudySolutionStep(
+                    stepNumber: s["step_number"] as? Int ?? 0,
+                    latex: s["latex"] as? String ?? "",
+                    explanation: s["explanation"] as? String ?? "",
+                    isKeyStep: s["is_key_step"] as? Bool ?? false
+                )
+            }
+        }
+
+        return StudySolveResponse(
+            answerLatex: json["answer_latex"] as? String ?? "",
+            answerCopyable: json["answer_copyable"] as? String ?? "",
+            isMultipleChoice: json["is_multiple_choice"] as? Bool ?? false,
+            multipleChoiceLetter: json["multiple_choice_letter"] as? String,
+            confidence: json["confidence"] as? Double ?? 0,
+            topic: json["topic"] as? String,
+            steps: steps
+        )
+    }
+
+    /// POST /api/v1/study/explain
+    func studyExplain(
+        sessionId: String,
+        questionId: String,
+        questionText: String,
+        globalContext: String,
+        previouslyExplainedConcepts: [String]
+    ) async throws -> StudyExplainResponse {
+        let body: [String: Any] = [
+            "session_id": sessionId,
+            "question_id": questionId,
+            "question_text": questionText,
+            "global_context": globalContext,
+            "previously_explained_concepts": previouslyExplainedConcepts,
+            "user_id": AppStateManager.shared.deviceID
+        ]
+        let data = try await post(endpoint: "/api/v1/study/explain", body: body)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid explain response")
+        }
+
+        var similarExample: StudySimilarExample? = nil
+        if let ex = json["similar_example"] as? [String: Any] {
+            let exSteps = (ex["steps"] as? [[String: Any]] ?? []).map { s in
+                StudySolutionStep(
+                    stepNumber: s["step_number"] as? Int ?? 0,
+                    latex: s["latex"] as? String ?? "",
+                    explanation: s["explanation"] as? String ?? "",
+                    isKeyStep: s["is_key_step"] as? Bool ?? false
+                )
+            }
+            similarExample = StudySimilarExample(
+                problemLatex: ex["problem_latex"] as? String ?? "",
+                solutionLatex: ex["solution_latex"] as? String ?? "",
+                steps: exSteps
+            )
+        }
+
+        return StudyExplainResponse(
+            conceptName: json["concept_name"] as? String ?? "",
+            conceptExplanation: json["concept_explanation"] as? String ?? "",
+            formulaLatex: json["formula_latex"] as? String,
+            strategy: json["strategy"] as? String,
+            similarExample: similarExample,
+            commonMistakes: json["common_mistakes"] as? [String] ?? []
+        )
+    }
+
+    /// POST /api/v1/study/check
+    func studyCheck(
+        sessionId: String,
+        questionId: String,
+        questionText: String,
+        userAttemptText: String?,
+        userAttemptImage: String?,
+        globalContext: String
+    ) async throws -> StudyCheckResponse {
+        var body: [String: Any] = [
+            "session_id": sessionId,
+            "question_id": questionId,
+            "question_text": questionText,
+            "global_context": globalContext,
+            "user_id": AppStateManager.shared.deviceID
+        ]
+        if let text = userAttemptText { body["user_attempt_text"] = text }
+        if let img = userAttemptImage { body["user_attempt_image"] = img }
+
+        let data = try await post(endpoint: "/api/v1/study/check", body: body)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid check response")
+        }
+
+        return StudyCheckResponse(
+            isCorrect: json["is_correct"] as? Bool ?? false,
+            correctnessPercentage: json["correctness_percentage"] as? Int ?? 0,
+            feedback: json["feedback"] as? String ?? "",
+            errorStep: json["error_step"] as? Int,
+            errorType: json["error_type"] as? String,
+            correctFromError: json["correct_from_error"] as? String,
+            encouragement: json["encouragement"] as? String
+        )
+    }
+
+    // MARK: - Study Quiz
+
+    struct StudyQuizQuestion {
+        let quizId: String
+        let questionLatex: String
+        let correctAnswerLatex: String
+        let correctAnswerCopyable: String
+        let hint: String?
+        let topic: String?
+    }
+
+    struct StudyQuizResponse {
+        let quizQuestions: [StudyQuizQuestion]
+    }
+
+    /// POST /api/v1/study/quiz
+    func studyQuiz(
+        sessionId: String,
+        topics: [String],
+        difficulty: String,
+        count: Int,
+        excludeQuestions: [String],
+        sampleQuestions: [String],
+        globalContext: String
+    ) async throws -> StudyQuizResponse {
+        let body: [String: Any] = [
+            "session_id": sessionId,
+            "topics": topics,
+            "difficulty": difficulty,
+            "count": count,
+            "exclude_questions": excludeQuestions,
+            "sample_questions": sampleQuestions,
+            "global_context": globalContext,
+            "user_id": AppStateManager.shared.deviceID
+        ]
+        let data = try await post(endpoint: "/api/v1/study/quiz", body: body)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.serverError("Invalid quiz response")
+        }
+
+        var questions: [StudyQuizQuestion] = []
+        if let arr = json["quiz_questions"] as? [[String: Any]] {
+            for item in arr {
+                questions.append(StudyQuizQuestion(
+                    quizId: item["quiz_id"] as? String ?? "",
+                    questionLatex: item["question_latex"] as? String ?? "",
+                    correctAnswerLatex: item["correct_answer_latex"] as? String ?? "",
+                    correctAnswerCopyable: item["correct_answer_copyable"] as? String ?? "",
+                    hint: item["hint"] as? String,
+                    topic: item["topic"] as? String
+                ))
+            }
+        }
+        return StudyQuizResponse(quizQuestions: questions)
+    }
+
     // MARK: - HTTP Helpers
-    
+
     private func get(endpoint: String, token: String? = nil, retried: Bool = false) async throws -> Data {
         let urlStr = baseURL + endpoint
         print("[API] GET \(urlStr)")

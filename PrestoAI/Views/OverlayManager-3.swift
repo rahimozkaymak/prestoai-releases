@@ -18,6 +18,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     private var dragStartMouse: NSPoint = .zero
     private var isPageReady = false
     private var chunkQueue: [String] = []
+    private var pendingJSCalls: [String] = []
     private var isPromptMode = false
     private var studyTextField: NSTextField?
     private var studyPromptBg: NSView?      // styled background behind the text field
@@ -34,7 +35,14 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     private var popupDismissTimer: Timer?
     var onFollowUpSubmit: ((String) -> Void)?
 
-    private let defaultWidth:  CGFloat = 420
+    // Minimize/restore state
+    private var preMinimizeFrame: NSRect?
+    private var restorePill: NSPanel?
+
+    // Delayed dismiss cancellation token
+    private var pendingDismissWorkItem: DispatchWorkItem?
+
+    private let defaultWidth:  CGFloat = 580
     private let defaultHeight: CGFloat = 340
     private let minWidth:      CGFloat = 260
     private let minHeight:     CGFloat = 180
@@ -72,6 +80,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     func showLoading() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.pendingDismissWorkItem?.cancel()
+            self.pendingDismissWorkItem = nil
             self.ensureWindow()
             self.webView?.loadHTMLString(self.loadingHTML(), baseURL: nil)
             self.present()
@@ -81,6 +91,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     func showResponse(_ text: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.pendingDismissWorkItem?.cancel()
+            self.pendingDismissWorkItem = nil
             self.isPageReady = false
             self.chunkQueue.removeAll()
             self.ensureWindow()
@@ -178,22 +190,41 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         webView?.evaluateJavaScript("appendChunk(`\(escaped)`)", completionHandler: nil)
     }
 
+    /// Safe JS evaluation — queues calls until HTML has finished loading
+    private func evaluateJSSafe(_ js: String) {
+        if isPageReady {
+            webView?.evaluateJavaScript(js, completionHandler: nil)
+        } else {
+            pendingJSCalls.append(js)
+        }
+    }
+
+    private func flushPendingJSCalls() {
+        for js in pendingJSCalls {
+            webView?.evaluateJavaScript(js, completionHandler: nil)
+        }
+        pendingJSCalls.removeAll()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isPageReady = true
         for chunk in chunkQueue { appendChunkDirect(chunk) }
         chunkQueue.removeAll()
+        flushPendingJSCalls()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         isPageReady = true
         for chunk in chunkQueue { appendChunkDirect(chunk) }
         chunkQueue.removeAll()
+        flushPendingJSCalls()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         isPageReady = true
         for chunk in chunkQueue { appendChunkDirect(chunk) }
         chunkQueue.removeAll()
+        flushPendingJSCalls()
     }
 
     // Intercept link clicks and open in default browser
@@ -293,7 +324,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
-    // MARK: - Auto Solve Results
+    // MARK: - Auto Solve Results (Legacy compat — old coordinator still calls these)
 
     func showAutoSolveResults(count: Int) {
         DispatchQueue.main.async { [weak self] in
@@ -303,64 +334,396 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
     }
 
-    // Rebuilds the full autosolve UI — header, page dividers, and all answer rows.
-    // Accepts AutoSolveAnswer structs directly; JSON encodes for safe JS transfer.
     func showAllAutoSolveAnswers(answers: [AutoSolveAnswer], currentPage: Int) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.resizeForAutoSolveAnswers(count: answers.count)
+            self.resizeForStudyContent(questionCount: answers.count)
             let done = answers.filter { !$0.solving }.count
             let total = answers.count
             let headerText = total == 0
                 ? "Auto Solve — all solved"
                 : "Auto Solve — \(done)/\(total) answers • Page \(currentPage)"
-            let payload: [[String: Any]] = answers.map {
-                ["id": $0.id, "latex": $0.latex, "copyable": $0.copyable,
-                 "isMC": $0.isMC, "failed": $0.failed, "solving": $0.solving, "page": $0.page]
+
+            let jsonEntries = answers.map { a -> String in
+                let esc = { (s: String) -> String in
+                    s.replacingOccurrences(of: "\\", with: "\\\\")
+                     .replacingOccurrences(of: "\"", with: "\\\"")
+                     .replacingOccurrences(of: "\n", with: "\\n")
+                     .replacingOccurrences(of: "\r", with: "\\r")
+                }
+                return """
+                {"id":"\(esc(a.id))","latex":"\(esc(a.latex))","copyable":"\(esc(a.copyable))","isMC":\(a.isMC),"failed":\(a.failed),"solving":\(a.solving),"page":\(a.page)}
+                """
             }
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-                  let jsonStr = String(data: jsonData, encoding: .utf8),
-                  let hdrData = try? JSONSerialization.data(withJSONObject: headerText),
-                  let hdrStr = String(data: hdrData, encoding: .utf8) else {
-                print("[AutoSolve] Failed to encode answers as JSON"); return
-            }
-            self.webView?.evaluateJavaScript("refreshAutoSolveUI(\(hdrStr), \(jsonStr))") { _, error in
+            let jsonStr = "[" + jsonEntries.joined(separator: ",") + "]"
+            let hdrEsc = headerText.replacingOccurrences(of: "\\", with: "\\\\")
+                                   .replacingOccurrences(of: "\"", with: "\\\"")
+
+            self.webView?.evaluateJavaScript("refreshAutoSolveUI(\"\(hdrEsc)\", \(jsonStr))") { _, error in
                 if let error = error { print("[AutoSolve] refreshAutoSolveUI error: \(error)") }
             }
         }
     }
 
-    private func resizeForAutoSolveAnswers(count: Int) {
-        guard isStudyMode, let window = overlayWindow else { return }
-        let answerRowHeight: CGFloat = 44
-        let headerHeight: CGFloat = 50
-        let paddingHeight: CGFloat = 80
-        let contentHeight = headerHeight + (CGFloat(count) * answerRowHeight) + paddingHeight
-        let maxHeight = (NSScreen.main?.frame.height ?? 900) * 0.7
-        let newHeight = max(studyBarExpandedHeight, min(contentHeight, maxHeight))
-        guard abs(window.frame.height - newHeight) > 4 else { return }  // skip trivial changes
-        let frame = window.frame
-        window.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y,
-                               width: frame.width, height: newHeight),
-                        display: true, animate: true)
-    }
-
     func replaceAutoSolveAnswer(id: String, latex: String, copyable: String, isMC: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let payload: [String: Any] = ["id": id, "latex": latex, "copyable": copyable, "isMC": isMC, "failed": false]
-            guard let jsonData = try? JSONSerialization.data(withJSONObject: payload),
-                  let jsonStr = String(data: jsonData, encoding: .utf8) else { return }
-            self.webView?.evaluateJavaScript("replaceAutosolveAnswerSafe(\(jsonStr))") { _, error in
-                if let error = error { print("[AutoSolve] replaceAutosolveAnswerSafe error: \(error)") }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+                 .replacingOccurrences(of: "\r", with: "\\r")
+            }
+            let jsonStr = """
+            {"id":"\(esc(id))","latex":"\(esc(latex))","copyable":"\(esc(copyable))","isMC":\(isMC),"failed":false}
+            """
+            self.webView?.evaluateJavaScript("replaceAutosolveAnswer && replaceAutosolveAnswer(\(jsonStr))") { _, error in
+                if let error = error { print("[AutoSolve] replaceAutosolveAnswer error: \(error)") }
             }
         }
     }
 
     func clearAutoSolveResults() {
         DispatchQueue.main.async { [weak self] in
-            self?.webView?.evaluateJavaScript("clearAutosolvePanel()", completionHandler: nil)
+            self?.webView?.evaluateJavaScript("clearAutosolvePanel && clearAutosolvePanel()", completionHandler: nil)
         }
+    }
+
+    // MARK: - Study Mode V2 API
+
+    /// Refresh the full study UI with question data from SessionMemory
+    func refreshStudyUI(statusText: String, dotState: String, questions: [QuestionRecord]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            // Only resize in Solve mode — Learn mode controls its own height
+            if StudyCoordinator.shared.currentMode == .solve {
+                self.resizeForStudyContent(questionCount: questions.count)
+            }
+
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+                 .replacingOccurrences(of: "\r", with: "\\r")
+            }
+
+            let jsonEntries = questions.map { q -> String in
+                let stepsJson: String
+                if let steps = q.steps {
+                    let stepsArr = steps.map { s in
+                        "{\"stepNumber\":\(s.stepNumber),\"latex\":\"\(esc(s.latex))\",\"explanation\":\"\(esc(s.explanation))\",\"isKeyStep\":\(s.isKeyStep)}"
+                    }
+                    stepsJson = "[" + stepsArr.joined(separator: ",") + "]"
+                } else {
+                    stepsJson = "null"
+                }
+                return "{\"id\":\"\(esc(q.id))\",\"state\":\"\(q.state.rawValue)\",\"latex\":\"\(esc(q.answer?.latex ?? ""))\",\"copyable\":\"\(esc(q.answer?.copyable ?? ""))\",\"page\":\(q.detectedPage),\"steps\":\(stepsJson)}"
+            }
+            let jsonStr = "[" + jsonEntries.joined(separator: ",") + "]"
+            let statusEsc = esc(statusText)
+
+            self.evaluateJSSafe("refreshStudyUI(\"\(statusEsc)\", \"\(dotState)\", \(jsonStr))")
+        }
+    }
+
+    /// Update a single question row
+    func updateQuestionRow(_ question: QuestionRecord) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+                 .replacingOccurrences(of: "\r", with: "\\r")
+            }
+            let jsonStr = "{\"id\":\"\(esc(question.id))\",\"state\":\"\(question.state.rawValue)\",\"latex\":\"\(esc(question.answer?.latex ?? ""))\",\"copyable\":\"\(esc(question.answer?.copyable ?? ""))\",\"page\":\(question.detectedPage),\"steps\":null}"
+            self.evaluateJSSafe("updateQuestionRow(\(jsonStr))")
+        }
+    }
+
+    /// Update steps for a question after lazy load
+    func updateQuestionSteps(questionId: String, steps: [SolutionStep]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+                 .replacingOccurrences(of: "\r", with: "\\r")
+            }
+            let stepsArr = steps.map { s in
+                "{\"stepNumber\":\(s.stepNumber),\"latex\":\"\(esc(s.latex))\",\"explanation\":\"\(esc(s.explanation))\",\"isKeyStep\":\(s.isKeyStep)}"
+            }
+            let jsonStr = "[" + stepsArr.joined(separator: ",") + "]"
+            let idEsc = esc(questionId)
+            self.evaluateJSSafe("updateSteps(\"\(idEsc)\", \(jsonStr))")
+        }
+    }
+
+    /// Update just the status bar text and dot
+    func updateStudyStatus(text: String, dotState: String) {
+        DispatchQueue.main.async { [weak self] in
+            let esc = text.replacingOccurrences(of: "\\", with: "\\\\")
+                          .replacingOccurrences(of: "\"", with: "\\\"")
+            self?.evaluateJSSafe("updateStatus(\"\(esc)\", \"\(dotState)\")")
+        }
+    }
+
+    /// Show session summary card
+    func showStudySessionSummary(duration: String, solved: Int, pages: Int, topics: [String]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+            }
+            let topicsJson = "[" + topics.map { "\"\(esc($0))\"" }.joined(separator: ",") + "]"
+            let json = "{\"duration\":\"\(esc(duration))\",\"solved\":\(solved),\"pages\":\(pages),\"topics\":\(topicsJson)}"
+            self.expandStudyBar()
+            self.evaluateJSSafe("showSessionSummary(\(json))")
+        }
+    }
+
+    /// Show explain card in learn mode
+    func showExplainCard(_ explanation: ConceptExplanation) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+            }
+            var json = "{\"conceptName\":\"\(esc(explanation.conceptName))\",\"conceptExplanation\":\"\(esc(explanation.conceptExplanation))\""
+            if let formula = explanation.formulaLatex {
+                json += ",\"formulaLatex\":\"\(esc(formula))\""
+            }
+            if let strategy = explanation.strategy {
+                json += ",\"strategy\":\"\(esc(strategy))\""
+            }
+            json += "}"
+            self.expandStudyBar()
+            self.evaluateJSSafe("showExplainCard(\(json))")
+        }
+    }
+
+    /// Show work check feedback in learn mode
+    func showCheckFeedback(_ feedback: WorkCheckFeedback) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+            }
+            var json = "{\"isCorrect\":\(feedback.isCorrect),\"correctnessPercentage\":\(feedback.correctnessPercentage),\"feedback\":\"\(esc(feedback.feedback))\""
+            if let enc = feedback.encouragement {
+                json += ",\"encouragement\":\"\(esc(enc))\""
+            }
+            json += "}"
+            self.expandStudyBar()
+            self.evaluateJSSafe("showCheckFeedback(\(json))")
+        }
+    }
+
+    /// Show user input echo bubble above the response area
+    func showUserInputEcho(_ text: String) {
+        DispatchQueue.main.async { [weak self] in
+            let esc = text.replacingOccurrences(of: "\\", with: "\\\\")
+                          .replacingOccurrences(of: "\"", with: "\\\"")
+                          .replacingOccurrences(of: "\n", with: "\\n")
+            self?.evaluateJSSafe("showUserInput(\"\(esc)\")")
+        }
+    }
+
+    /// Resize overlay to fit current content without rebuilding rows
+    func resizeForCurrentContent() {
+        guard StudyCoordinator.shared.currentMode == .solve else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.webView?.evaluateJavaScript("document.getElementById('questionsContainer').children.length") { [weak self] result, _ in
+                if let count = result as? Int {
+                    self?.resizeForStudyContent(questionCount: count)
+                }
+            }
+        }
+    }
+
+    /// Resize overlay to Learn mode height — compact with input field
+    func resizeToLearnMode() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isStudyMode, let window = self.overlayWindow else { return }
+
+            self.webView?.evaluateJavaScript("""
+                (function() {
+                    var el = document.getElementById('learnContent');
+                    if (!el || el.innerHTML.trim() === '') return 0;
+                    return el.scrollHeight;
+                })()
+            """) { [weak self] result, _ in
+                guard let self = self, let window = self.overlayWindow else { return }
+
+                let contentHeight = (result as? Int).map { CGFloat($0) } ?? 0
+                let statusBarHeight: CGFloat = 28
+                let inputHeight: CGFloat = 48
+                let padding: CGFloat = 16
+
+                let targetHeight: CGFloat
+                if contentHeight > 0 {
+                    let total = statusBarHeight + contentHeight + inputHeight + padding
+                    let maxHeight = (NSScreen.main?.frame.height ?? 900) * 0.65
+                    targetHeight = min(total, maxHeight)
+                } else {
+                    targetHeight = self.studyBarCompactHeight
+                }
+
+                guard abs(window.frame.height - targetHeight) > 4 else { return }
+
+                let frame = window.frame
+                window.setFrame(
+                    NSRect(x: frame.origin.x, y: frame.origin.y,
+                           width: frame.width, height: targetHeight),
+                    display: true, animate: true
+                )
+            }
+        }
+    }
+
+    /// Show loading state in learn content area
+    func showLearnLoading() {
+        DispatchQueue.main.async { [weak self] in
+            self?.evaluateJSSafe("""
+                document.getElementById('learnContent').innerHTML = '<div class="steps-loading">Thinking...</div>';
+                document.getElementById('learnContent').style.display = '';
+                document.getElementById('questionsContainer').style.display = 'none';
+                showContentArea();
+            """)
+        }
+    }
+
+    /// Show error message in learn content
+    func showLearnError(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            let esc = message.replacingOccurrences(of: "\\", with: "\\\\")
+                             .replacingOccurrences(of: "\"", with: "\\\"")
+            self?.evaluateJSSafe("""
+                document.getElementById('learnContent').innerHTML = '<div style="padding:12px 14px;color:var(--text-secondary);font:400 12px/1.5 -apple-system,sans-serif;">\(esc)</div>';
+                showContentArea();
+            """)
+        }
+    }
+
+    /// Prepare learn content for streaming (freeform questions)
+    func showLearnStreamingStart() {
+        DispatchQueue.main.async { [weak self] in
+            self?.evaluateJSSafe("""
+                document.getElementById('learnContent').innerHTML = '';
+                document.getElementById('learnContent').style.display = '';
+                document.getElementById('questionsContainer').style.display = 'none';
+                showContentArea();
+            """)
+        }
+    }
+
+    /// Finalize after streaming completes
+    func finalizeStream() {
+        DispatchQueue.main.async { [weak self] in
+            self?.evaluateJSSafe("finalize()")
+            if self?.isStudyMode == true {
+                self?.studyTextField?.stringValue = ""
+                self?.studyTextField?.isEnabled = true
+                self?.overlayWindow?.makeFirstResponder(self?.studyTextField)
+            }
+        }
+    }
+
+    /// Show quiz card with practice questions
+    func showQuizCard(_ questions: [APIService.StudyQuizQuestion]) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let esc = { (s: String) -> String in
+                s.replacingOccurrences(of: "\\", with: "\\\\")
+                 .replacingOccurrences(of: "\"", with: "\\\"")
+                 .replacingOccurrences(of: "\n", with: "\\n")
+            }
+            let jsonEntries = questions.map { q in
+                var entry = "{\"quizId\":\"\(esc(q.quizId))\",\"questionLatex\":\"\(esc(q.questionLatex))\",\"correctAnswerLatex\":\"\(esc(q.correctAnswerLatex))\",\"correctAnswerCopyable\":\"\(esc(q.correctAnswerCopyable))\""
+                if let hint = q.hint { entry += ",\"hint\":\"\(esc(hint))\"" }
+                entry += "}"
+                return entry
+            }
+            let json = "[" + jsonEntries.joined(separator: ",") + "]"
+            self.expandStudyBar()
+            self.evaluateJSSafe("showQuizCard(\(json))")
+        }
+    }
+
+    /// Hide the native text field (Solve mode — no input needed)
+    func hideStudyTextField() {
+        DispatchQueue.main.async { [weak self] in
+            self?.studyPromptContainer?.isHidden = true
+        }
+    }
+
+    /// Show the native text field (Learn mode — input visible)
+    func showStudyTextField() {
+        DispatchQueue.main.async { [weak self] in
+            self?.studyPromptContainer?.isHidden = false
+            self?.overlayWindow?.makeFirstResponder(self?.studyTextField)
+        }
+    }
+
+    /// Show placeholder shimmer rows while identify is in progress
+    func showIdentifyingPlaceholders(count: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            var js = "document.getElementById('questionsContainer').innerHTML = '';"
+            for i in 0..<count {
+                js += """
+                (function() {
+                    var row = document.createElement('div');
+                    row.className = 'question-row solving';
+                    row.setAttribute('data-id', 'placeholder-\(i)');
+                    var header = document.createElement('div');
+                    header.className = 'row-header';
+                    var num = document.createElement('span');
+                    num.className = 'q-number';
+                    num.innerHTML = '&nbsp;';
+                    header.appendChild(num);
+                    var answer = document.createElement('span');
+                    answer.className = 'q-answer';
+                    answer.textContent = '\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0\\u00A0';
+                    header.appendChild(answer);
+                    row.appendChild(header);
+                    row.style.opacity = '0';
+                    row.style.transform = 'translateX(12px)';
+                    row.style.transition = 'opacity 0.25s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                    document.getElementById('questionsContainer').appendChild(row);
+                    setTimeout(function() { row.style.opacity = '1'; row.style.transform = 'translateX(0)'; }, \(i) * 60);
+                })();
+                """
+            }
+            js += "document.getElementById('contentArea').classList.add('visible');"
+            self.evaluateJSSafe(js)
+        }
+    }
+
+    // MARK: - Resize for study content
+
+    private func resizeForStudyContent(questionCount: Int) {
+        guard isStudyMode, let window = overlayWindow else { return }
+        let rowHeight: CGFloat = 44
+        let headerHeight: CGFloat = 28
+        let paddingHeight: CGFloat = 16
+        // In solve mode, no input field — content extends to bottom
+        let inputHeight: CGFloat = StudyCoordinator.shared.currentMode == .solve ? 0 : 48
+        let contentHeight = headerHeight + (CGFloat(questionCount) * rowHeight) + inputHeight + paddingHeight
+        let maxHeight = (NSScreen.main?.frame.height ?? 900) * 0.65
+        let newHeight = max(CGFloat(76), min(contentHeight, maxHeight))
+        guard abs(window.frame.height - newHeight) > 4 else { return }
+        let frame = window.frame
+        window.setFrame(NSRect(x: frame.origin.x, y: frame.origin.y,
+                               width: frame.width, height: newHeight),
+                        display: true, animate: true)
     }
 
     func dismissPopup() {
@@ -426,12 +789,22 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         self.popupPanel = panel
     }
 
-    private let studyBarCompactHeight: CGFloat = 100
+    private let studyBarCompactHeight: CGFloat = 76
     private let studyBarExpandedHeight: CGFloat = 420
+    private let studyBarWidth: CGFloat = 520
+
+    // Study Mode V2 callbacks
+    var onStudyModeSwitch: ((String) -> Void)?  // "solve" or "learn"
+    var onStudyExpandSteps: ((String) -> Void)?  // question ID
+    var onStudyCollapseSteps: ((String) -> Void)?  // question ID
 
     func showPromptInput(studyMode: Bool = false, placeholder: String? = nil) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // Cancel any pending delayed dismiss to prevent it from killing this new overlay
+            self.pendingDismissWorkItem?.cancel()
+            self.pendingDismissWorkItem = nil
+            print("[Overlay] showPromptInput called (studyMode=\(studyMode)). overlayWindow is \(self.overlayWindow == nil ? "nil" : "non-nil")")
             self.isPromptMode = true
             self.isStudyMode = studyMode
             if studyMode {
@@ -461,7 +834,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         window.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
         window.maxSize = NSSize(width: 9999, height: 9999)
         window.setFrame(newFrame, display: true, animate: true)
-        webView?.evaluateJavaScript("showResponseArea()", completionHandler: nil)
+        evaluateJSSafe("showResponseArea()")
     }
 
     /// Collapse downward: keep bottom edge fixed, shrink height
@@ -479,7 +852,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         window.setFrame(newFrame, display: true, animate: true)
         window.minSize = NSSize(width: minWidth, height: studyBarCompactHeight)
         window.maxSize = NSSize(width: 9999, height: studyBarCompactHeight)
-        webView?.evaluateJavaScript("hideResponseArea()", completionHandler: nil)
+        evaluateJSSafe("hideResponseArea()")
         // Re-enable native prompt field
         studyTextField?.stringValue = ""
         studyTextField?.isEnabled = true
@@ -490,11 +863,16 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     func dismiss() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            print("[Overlay] dismiss() called. overlayWindow is \(self.overlayWindow == nil ? "nil" : "non-nil")")
+            // Cancel any pending delayed dismiss
+            self.pendingDismissWorkItem?.cancel()
+            self.pendingDismissWorkItem = nil
             // Don't overwrite saved position with the compact prompt frame
             if !self.isPromptMode {
                 if let f = self.overlayWindow?.frame { self.savedFrame = f }
             }
             self.isPromptMode = false
+            self.isStudyMode = false
             self.conversationHistory.removeAll()
             self.currentScreenshot = nil
             self.onFollowUpSubmit = nil
@@ -518,9 +896,133 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             self.overlayWindow = nil
             self.isPageReady = false
             self.chunkQueue.removeAll()
+            self.pendingJSCalls.removeAll()
+            self.preMinimizeFrame = nil
+            self.restorePill?.orderOut(nil)
+            self.restorePill = nil
 
             print("[Overlay] Dismissed and cleaned up")
         }
+    }
+
+    /// Schedule a delayed dismiss that can be cancelled if a new overlay is shown
+    func dismissAfterDelay(_ seconds: TimeInterval) {
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.dismiss()
+        }
+        pendingDismissWorkItem?.cancel()
+        pendingDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: workItem)
+    }
+
+    // MARK: - Minimize / Restore
+
+    private func minimizeOverlay() {
+        guard let window = overlayWindow else { return }
+        preMinimizeFrame = window.frame
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        // Animate window down to a tiny rect at bottom-center
+        let pillWidth: CGFloat = 140
+        let pillHeight: CGFloat = 4
+        let targetFrame = NSRect(
+            x: screen.midX - pillWidth / 2,
+            y: screen.minY,
+            width: pillWidth,
+            height: pillHeight
+        )
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            window.animator().setFrame(targetFrame, display: true)
+            window.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            window.orderOut(nil)
+            window.alphaValue = 1
+            self?.showRestorePill()
+        })
+    }
+
+    private func showRestorePill() {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let pillWidth: CGFloat = 140
+        let pillHeight: CGFloat = 32
+        let pillFrame = NSRect(
+            x: screen.midX - pillWidth / 2,
+            y: screen.minY + 8,
+            width: pillWidth,
+            height: pillHeight
+        )
+
+        let pill = NSPanel(
+            contentRect: pillFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        pill.level = .floating
+        pill.isOpaque = false
+        pill.backgroundColor = .clear
+        pill.hasShadow = true
+        pill.isMovableByWindowBackground = false
+        pill.hidesOnDeactivate = false
+        pill.isFloatingPanel = true
+        pill.isReleasedWhenClosed = false
+        pill.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let btn = NSButton(frame: NSRect(origin: .zero, size: pillFrame.size))
+        btn.title = "Presto AI"
+        btn.bezelStyle = .recessed
+        btn.isBordered = false
+        btn.wantsLayer = true
+        btn.layer?.cornerRadius = pillHeight / 2
+        btn.layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.92).cgColor
+        btn.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        btn.contentTintColor = NSColor(white: 0.85, alpha: 1)
+        btn.target = self
+        btn.action = #selector(restoreFromPill)
+
+        // Hover tracking
+        let area = NSTrackingArea(rect: btn.bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: btn, userInfo: nil)
+        btn.addTrackingArea(area)
+
+        pill.contentView = btn
+        pill.alphaValue = 0
+        pill.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            pill.animator().alphaValue = 1
+        }
+
+        self.restorePill = pill
+    }
+
+    @objc private func restoreFromPill() {
+        // Fade out pill
+        guard let pill = restorePill else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            pill.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            pill.orderOut(nil)
+            self?.restorePill = nil
+        })
+
+        // Restore overlay window
+        guard let window = overlayWindow, let frame = preMinimizeFrame else { return }
+        window.setFrame(frame, display: false)
+        window.alphaValue = 0
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }
+        preMinimizeFrame = nil
     }
 
     // MARK: - WKScriptMessageHandler (resize grip events from JS)
@@ -554,12 +1056,31 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             onAutoSolveToggle?()
         case "studyCollapse":
             collapseStudyBar()
+        case "studyModeSwitch":
+            if let mode = dict["mode"] as? String {
+                onStudyModeSwitch?(mode)
+            }
+        case "studyExpandSteps":
+            if let id = dict["id"] as? String {
+                onStudyExpandSteps?(id)
+            }
+        case "studyCollapseSteps":
+            if let id = dict["id"] as? String {
+                onStudyCollapseSteps?(id)
+            }
         case "suggestionAccept":
             dismissPopup()
             onSuggestionAccept?()
         case "suggestionDismiss":
             dismissPopup()
             onSuggestionDismiss?()
+        case "nudgeAccepted":
+            if let id = dict["id"] as? String {
+                StudyCoordinator.shared.recordUserActivity()
+                StudyCoordinator.shared.handleExplainIntent(questionId: id)
+            }
+        case "quizAnswer":
+            break // tracked client-side only
         case "autoSolveResolve":
             if let id = dict["id"] as? String {
                 StudyCoordinator.shared.resolveQuestion(id: id)
@@ -569,6 +1090,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
             }
+        case "minimize":
+            minimizeOverlay()
         default: break
         }
     }
@@ -672,9 +1195,10 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     }
 
     private func ensureStudyBarWindow() {
+        print("[Overlay] ensureStudyBarWindow called. overlayWindow is \(overlayWindow == nil ? "nil" : "non-nil")")
         if overlayWindow != nil { return }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let width: CGFloat = defaultWidth
+        let width: CGFloat = min(studyBarWidth, screen.width - 32)
         let height = studyBarCompactHeight
         let frame = NSRect(
             x: screen.maxX - width - 16,
@@ -857,10 +1381,11 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
         let sf = screen.visibleFrame
         let pad: CGFloat = 10
+        let width = min(defaultWidth, sf.width - pad * 2)
         return NSRect(
-            x: sf.maxX - defaultWidth - pad,
+            x: sf.maxX - width - pad,
             y: sf.maxY - defaultHeight - pad,
-            width: defaultWidth,
+            width: width,
             height: defaultHeight
         )
     }
@@ -1023,6 +1548,21 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             font-size: 10px; color: var(--text-dim);
             letter-spacing: 0.03em;
         }
+        .minimize-btn {
+            width: 14px; height: 14px; border-radius: 50%;
+            background: #666; border: none; cursor: pointer;
+            position: relative;
+            padding: 0; flex-shrink: 0;
+            transition: background 0.15s;
+            -webkit-app-region: no-drag;
+        }
+        .minimize-btn::after {
+            content: ''; position: absolute;
+            top: 50%; left: 3px; right: 3px;
+            height: 1.5px; background: #fff; border-radius: 1px;
+            transform: translateY(-50%);
+        }
+        .minimize-btn:hover { background: #999; }
         \(extraStyle)
         </style>
         <script>
@@ -1071,6 +1611,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         <div class="drag-bar">
             <img class="logo" src="data:image/png;base64,\(iconB64)">
             <span class="drag-spacer"></span>
+            <button class="minimize-btn" onclick="window.webkit.messageHandlers.overlay.postMessage({action:'minimize'})" title="Minimize"></button>
         </div>
         """
     }
@@ -1214,6 +1755,7 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         <script>
         MathJax = {
             tex: { inlineMath: [['$','$'],['\\\\(','\\\\)']], displayMath: [['$$','$$'],['\\\\[','\\\\]']], processEscapes: true },
+            chtml: { displayAlign: 'left', displayIndent: '0' },
             options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
         };
         </script>
@@ -1539,61 +2081,491 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
     private func studyModeBarHTML() -> String {
         """
         <!DOCTYPE html><html>
-        \(sharedHead(extraStyle: """
-        body { display: flex; flex-direction: column; height: 100vh; }
-        .study-controls {
-            display: flex; align-items: center; gap: 6px; margin-left: auto;
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width">
+        <style>
+        :root {
+            --text-primary: rgba(255, 255, 255, 0.92);
+            --text-secondary: rgba(255, 255, 255, 0.55);
+            --text-tertiary: rgba(255, 255, 255, 0.28);
+            --separator: rgba(255, 255, 255, 0.08);
+            --row-hover: rgba(255, 255, 255, 0.04);
+            --control-bg: rgba(255, 255, 255, 0.07);
+            --control-active-bg: rgba(255, 255, 255, 0.12);
+            --accent-green: #34C759;
+            --accent-amber: #FF9F0A;
+            --code-bg: rgba(0, 0, 0, 0.25);
         }
-        .study-btn {
-            background: var(--subtle-bg);
-            border: 1px solid var(--subtle-border);
-            border-radius: 5px;
-            color: var(--text-dim);
-            font-size: 11px;
-            padding: 2px 8px;
-            cursor: pointer;
+        :root.light {
+            --text-primary: rgba(0, 0, 0, 0.88);
+            --text-secondary: rgba(0, 0, 0, 0.50);
+            --text-tertiary: rgba(0, 0, 0, 0.25);
+            --separator: rgba(0, 0, 0, 0.06);
+            --row-hover: rgba(0, 0, 0, 0.03);
+            --control-bg: rgba(0, 0, 0, 0.05);
+            --control-active-bg: rgba(0, 0, 0, 0.08);
+            --accent-green: #34C759;
+            --accent-amber: #FF9F0A;
+            --code-bg: rgba(0, 0, 0, 0.04);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
             font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 13px;
+            line-height: 1.5;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Status Bar — 28px, always visible */
+        .status-bar {
+            height: 28px;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            gap: 8px;
+            -webkit-app-region: drag;
+            user-select: none;
+            cursor: grab;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .status-bar:active { cursor: grabbing; }
+
+        .activity-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: var(--accent-green);
+            flex-shrink: 0;
+            animation: pulse 2.5s ease-in-out infinite;
+        }
+        .activity-dot.paused {
+            background: var(--accent-amber);
+            animation: none;
+        }
+        .activity-dot.solving {
+            animation: pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .status-label {
+            font: 500 11px/1 -apple-system, sans-serif;
+            color: var(--text-secondary);
+            letter-spacing: 0.01em;
+            transition: opacity 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .status-spacer { flex: 1; }
+
+        /* Mode Toggle */
+        .mode-toggle {
+            display: flex;
+            background: var(--control-bg);
+            border-radius: 6px;
+            padding: 1px;
+            gap: 1px;
+            -webkit-app-region: no-drag;
+        }
+        .mode-toggle button {
+            font: 500 10px/1 -apple-system, sans-serif;
+            padding: 3px 10px;
+            border: none;
+            border-radius: 5px;
+            background: transparent;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .mode-toggle button.active {
+            background: var(--control-active-bg);
+            color: var(--text-primary);
+            box-shadow: 0 0.5px 1px rgba(0,0,0,0.12);
+        }
+        .mode-toggle button:hover:not(.active) {
+            color: var(--text-secondary);
+        }
+
+        /* Stop Button */
+        .stop-btn {
+            width: 18px; height: 18px;
+            border: none; background: none;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 4px;
             transition: background 0.15s, color 0.15s;
+            -webkit-app-region: no-drag;
         }
-        .study-btn:hover { background: var(--subtle-border); color: var(--text); }
-        .study-btn.active { background: rgba(52,199,89,0.15); border-color: rgba(52,199,89,0.3); color: #34c759; }
-        .study-status {
-            font-size: 11px; color: var(--loading-text); margin-left: 2px;
+        .stop-btn:hover {
+            background: var(--control-bg);
+            color: var(--text-secondary);
         }
-        .study-dot {
-            display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-            background: #4ade80; margin-right: 4px;
-            animation: pulse 2s ease-in-out infinite;
-        }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        .study-dot.paused { background: #f59e0b; animation: none; }
 
-        /* Response area (hidden by default, shown when answer streams in) */
-        .response-area {
+        /* Content Area */
+        .content-area {
+            position: absolute;
+            top: 28px;
+            left: 0;
+            right: 0;
+            bottom: 48px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 4px 0;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .content-area.visible { opacity: 1; }
+
+        .content-area::-webkit-scrollbar { width: 4px; }
+        .content-area::-webkit-scrollbar-track { background: transparent; }
+        .content-area::-webkit-scrollbar-thumb {
+            background: var(--text-tertiary);
+            border-radius: 2px;
+        }
+
+        /* Question Row */
+        .question-row {
+            padding: 8px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            border-bottom: 0.5px solid var(--separator);
+            transition: background 0.15s ease;
+            cursor: default;
+        }
+        .question-row:last-child { border-bottom: none; }
+        .question-row:hover { background: var(--row-hover); }
+
+        .row-header {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .q-number {
+            font: 600 11px/1 -apple-system, sans-serif;
+            color: var(--text-tertiary);
+            min-width: 20px;
+            flex-shrink: 0;
+        }
+
+        .q-answer {
+            flex: 1;
+            font: 400 13px/1.5 -apple-system, sans-serif;
+            color: var(--text-primary);
+            min-width: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .q-answer::-webkit-scrollbar {
             display: none;
-            position: absolute; top: 36px; left: 0; right: 0; bottom: 56px;
-            overflow-y: auto; overflow-x: hidden;
-            padding: 8px 16px;
-            -webkit-overflow-scrolling: auto;
         }
-        .response-area.visible { display: block; }
 
-        /* Collapse button */
-        .collapse-btn {
-            background: none; border: none; color: var(--text-dim);
-            font-size: 11px; cursor: pointer; padding: 2px 6px;
-            font-family: -apple-system, sans-serif;
+        .row-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+            opacity: 0;
+            transition: opacity 0.15s ease;
         }
-        .collapse-btn:hover { color: var(--text); }
+        .question-row:hover .row-actions { opacity: 1; }
 
-        /* Content typography (same as main response) */
-        .content { word-wrap: break-word; }
-        .content h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; }
-        .content h2 { font-size: 1.3em; font-weight: 600; margin: 0.7em 0 0.3em; }
-        .content h3 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; }
+        /* Action Buttons */
+        .action-btn {
+            width: 22px; height: 22px;
+            border: none; background: none;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 4px;
+            transition: background 0.1s, color 0.1s;
+        }
+        .action-btn:hover {
+            background: var(--control-bg);
+            color: var(--text-secondary);
+        }
+        .action-btn:active { background: var(--control-active-bg); }
+        .action-btn.copied { color: var(--accent-green); }
+
+        /* Solving State */
+        .question-row.solving .q-answer {
+            background: linear-gradient(90deg, var(--text-tertiary) 25%, var(--text-secondary) 50%, var(--text-tertiary) 75%);
+            background-size: 400px 100%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: shimmer 1.8s ease-in-out infinite;
+            font-style: italic;
+        }
+        @keyframes shimmer {
+            0% { background-position: -200px 0; }
+            100% { background-position: 200px 0; }
+        }
+
+        /* Placeholder shimmer for identifying state */
+        .question-row.solving .q-answer:empty,
+        .question-row.solving .q-number:empty {
+            display: inline-block;
+            min-width: 60px;
+            height: 14px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--control-bg) 25%, var(--control-active-bg) 50%, var(--control-bg) 75%);
+            background-size: 400px 100%;
+            animation: shimmer 1.8s ease-in-out infinite;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Failed State */
+        .question-row.failed .q-answer { color: var(--text-tertiary); }
+        .retry-link {
+            font: 400 12px/1 -apple-system, sans-serif;
+            color: var(--text-secondary);
+            cursor: pointer;
+            margin-left: 4px;
+            text-decoration: none;
+            transition: color 0.15s;
+        }
+        .retry-link:hover { color: var(--text-primary); }
+
+        /* Expanded Steps */
+        .steps-container {
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+            padding-left: 28px;
+        }
+        .steps-container.expanded {
+            max-height: 600px;
+            opacity: 1;
+        }
+        .step {
+            padding: 6px 0;
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+        .step-number {
+            font: 600 10px/1.6 -apple-system, sans-serif;
+            color: var(--text-tertiary);
+            min-width: 16px;
+            flex-shrink: 0;
+        }
+        .step-content { flex: 1; }
+        .step-math {
+            font: 400 13px/1.5 -apple-system, sans-serif;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+        .step-explanation {
+            font: 400 11px/1.4 -apple-system, sans-serif;
+            color: var(--text-secondary);
+        }
+        .step.key-step {
+            border-left: 1.5px solid rgba(52, 199, 89, 0.35);
+            padding-left: 8px;
+            margin-left: -10px;
+        }
+        .steps-loading {
+            padding: 12px 0;
+            color: var(--text-tertiary);
+            font: 400 12px/1 -apple-system, sans-serif;
+            font-style: italic;
+            background: linear-gradient(90deg, var(--text-tertiary) 25%, var(--text-secondary) 50%, var(--text-tertiary) 75%);
+            background-size: 400px 100%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: shimmer 1.8s ease-in-out infinite;
+        }
+
+        /* Page Divider */
+        .page-divider {
+            padding: 8px 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .page-divider::before, .page-divider::after {
+            content: '';
+            flex: 1;
+            height: 0.5px;
+            background: var(--separator);
+        }
+        .page-divider span {
+            font: 500 10px/1 -apple-system, sans-serif;
+            color: var(--text-tertiary);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        /* Learn Mode Cards */
+        .concept-card {
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .concept-title {
+            font: 600 13px/1.3 -apple-system, sans-serif;
+            color: var(--text-primary);
+        }
+        .concept-body {
+            font: 400 12px/1.5 -apple-system, sans-serif;
+            color: var(--text-secondary);
+        }
+        .concept-formula {
+            padding: 8px 12px;
+            background: var(--control-bg);
+            border-radius: 6px;
+            text-align: center;
+        }
+        .similar-example {
+            padding: 8px 0;
+            border-top: 0.5px solid var(--separator);
+            margin-top: 8px;
+        }
+        .similar-example-label {
+            font: 500 10px/1 -apple-system, sans-serif;
+            color: var(--text-tertiary);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .feedback-card { padding: 12px 14px; }
+        .feedback-score {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .score-bar {
+            height: 3px;
+            border-radius: 1.5px;
+            background: var(--control-bg);
+            flex: 1;
+        }
+        .score-fill {
+            height: 100%;
+            border-radius: 1.5px;
+            background: var(--accent-green);
+            transition: width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .feedback-text {
+            font: 400 12px/1.5 -apple-system, sans-serif;
+            color: var(--text-secondary);
+        }
+        .error-highlight { color: var(--accent-amber); font-weight: 500; }
+
+        /* Session Summary */
+        .summary-card {
+            padding: 16px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .summary-title {
+            font: 600 14px/1.3 -apple-system, sans-serif;
+            color: var(--text-primary);
+        }
+        .summary-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .stat {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .stat-value {
+            font: 600 18px/1 -apple-system, sans-serif;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+        }
+        .stat-label {
+            font: 400 10px/1 -apple-system, sans-serif;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .summary-topics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .topic-tag {
+            font: 500 10px/1 -apple-system, sans-serif;
+            padding: 3px 8px;
+            background: var(--control-bg);
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+
+        /* MathJax overrides */
+        mjx-container {
+            vertical-align: baseline !important;
+            line-height: 1.5;
+            display: inline !important;
+        }
+        mjx-container[jax="SVG"] > svg { vertical-align: middle !important; }
+        .MathJax { vertical-align: baseline !important; }
+
+        /* Identify loading */
+        .identify-loading {
+            padding: 16px 14px;
+            text-align: center;
+            color: var(--text-tertiary);
+            font: 400 12px/1.5 -apple-system, sans-serif;
+        }
+
+        /* User input echo */
+        .user-input-echo {
+            padding: 8px 14px;
+            margin-bottom: 4px;
+        }
+        .user-input-text {
+            font: 500 12px/1.4 -apple-system, sans-serif;
+            color: var(--text-primary);
+            padding: 8px 12px;
+            background: var(--control-bg);
+            border-radius: 8px;
+            border-bottom-right-radius: 2px;
+            display: inline-block;
+            max-width: 90%;
+            word-wrap: break-word;
+        }
+
+        /* Streaming content area (for learn mode chat) */
+        .content { word-wrap: break-word; padding: 4px 14px; }
+        .content h1 { font: 700 16px/1.3 -apple-system, sans-serif; color: var(--text-primary); margin: 12px 0 6px; }
+        .content h2 { font: 600 14px/1.3 -apple-system, sans-serif; color: var(--text-primary); margin: 10px 0 4px; }
+        .content h3 { font: 600 13px/1.3 -apple-system, sans-serif; color: var(--text-primary); margin: 8px 0 4px; }
         .content p { margin: 0.4em 0; }
-        .content ul, .content ol { padding-left: 1.4em; margin: 0.4em 0; }
-        .content li { margin: 0.15em 0; }
+        .content strong { font-weight: 600; }
+        .content em { font-style: italic; }
+        .content ul, .content ol { padding-left: 1.4em; margin: 4px 0; }
+        .content li { margin: 2px 0; font: 400 12px/1.5 -apple-system, sans-serif; color: var(--text-secondary); }
+        .content blockquote {
+            border-left: 2px solid var(--separator);
+            padding-left: 10px;
+            margin: 6px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        .content a { color: #6cb4ff; text-decoration: none; }
+        .content a:hover { text-decoration: underline; }
+        .content hr { border: none; border-top: 0.5px solid var(--separator); margin: 8px 0; }
         .content pre {
             background: var(--code-bg); border-radius: 6px;
             padding: 10px 12px; margin: 0.5em 0; overflow-x: auto;
@@ -1605,207 +2577,772 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
         }
         .content code {
             font-family: 'SF Mono', Menlo, Monaco, monospace;
-            background: var(--code-inline-bg); padding: 0.15em 0.35em;
+            background: var(--code-bg); padding: 0.15em 0.35em;
             border-radius: 3px; font-size: 0.9em;
         }
-        .content blockquote {
-            border-left: 3px solid var(--blockquote-border);
-            padding-left: 12px; margin: 0.5em 0; color: var(--blockquote-text);
+        /* Display math blocks */
+        .content mjx-container[display="true"] {
+            margin: 8px 0;
+            padding: 6px 0;
+            overflow-x: auto;
         }
-        .content a { color: var(--link-color); text-decoration: none; }
-        .content a:hover { text-decoration: underline; }
-        .content table { border-collapse: collapse; margin: 0.5em 0; width: 100%; font-size: 12px; }
-        .content th, .content td { border: 1px solid var(--subtle-border); padding: 4px 8px; }
-        .content th { background: var(--table-header-bg); font-weight: 600; }
-        .content hr { border: none; border-top: 1px solid var(--subtle-border); margin: 0.8em 0; }
-        .content strong { font-weight: 600; }
-        .content em { font-style: italic; }
-        .content img { max-width: 100%; border-radius: 4px; }
-        equation-block { display: block; margin: 0.5em 0; text-align: center; }
-        equation-inline { display: inline; }
 
-        /* Loading spinner */
-        .loading { display: flex; align-items: center; gap: 8px; padding: 12px 0; }
-        .spinner { width: 16px; height: 16px; border: 2px solid var(--spinner-border);
-                   border-top-color: var(--spinner-accent); border-radius: 50%;
-                   animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .loading-text { font-size: 12px; color: var(--loading-text); }
+        </style>
 
-        /* Auto Solve panel */
-        #autosolve-panel { display: none; padding: 8px 16px 4px; }
-        .autosolve-header { font-size: 11px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; letter-spacing: 0.02em; }
-        .answer-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; font-size: 13px; color: var(--text); border-bottom: 1px solid var(--subtle-bg); }
-        .answer-row:last-child { border-bottom: none; }
-        .q-num { font-size: 11px; color: var(--text-dim); min-width: 28px; flex-shrink: 0; }
-        .answer { flex: 1; }
-        .as-copy-btn, .as-resolve-btn { background: none; border: none; cursor: pointer; font-size: 12px; color: var(--text-dim); padding: 0 2px; opacity: 0.7; flex-shrink: 0; }
-        .as-copy-btn:hover, .as-resolve-btn:hover { opacity: 1; }
-        .answer-row.error { opacity: 0.7; }
-        .answer-error { flex: 1; font-size: 12px; color: #e6a817; font-style: italic; }
-        .answer-row.solving { opacity: 0.5; }
-        .answer-pending { flex: 1; font-size: 12px; color: var(--text-dim); font-style: italic; }
-        .page-divider { text-align: center; color: var(--text-dim); font-size: 11px; padding: 6px 0; border-top: 1px solid var(--subtle-bg); margin: 4px 0; }
-        .study-btn.disabled-btn { opacity: 0.4; cursor: default; }
-        """))
+        <!-- MathJax config -->
+        <script>
+        MathJax = {
+            tex: { inlineMath: [['\\\\(','\\\\)']], displayMath: [['\\\\[','\\\\]']] },
+            svg: { fontCache: 'global' },
+            options: { renderActions: { addMenu: [] } },
+            startup: { typeset: false }
+        };
+        </script>
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
 
         <!-- streaming-markdown -->
         <script>\(smdJS)</script>
+        <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js" async></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" async></script>
 
-        <!-- CDN libs for finalization -->
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css" id="hljs-dark">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css" id="hljs-light" disabled>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js" onload="checkLibs()"></script>
-        <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js" onload="checkLibs()"></script>
-        <script src="https://cdn.jsdelivr.net/npm/marked-highlight/lib/index.umd.js" onload="checkLibs()"></script>
-        <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" onload="checkLibs()"></script>
         <script>
-        MathJax = {
-            tex: { inlineMath: [['$','$'],['\\\\(','\\\\)']], displayMath: [['$$','$$'],['\\\\[','\\\\]']], processEscapes: true },
-            options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
-        };
+        function setTheme(isDark) {
+            document.documentElement.className = isDark ? '' : 'light';
+        }
         </script>
-        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+        </head>
+
+        <body>
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="activity-dot" id="activityDot"></div>
+            <span class="status-label" id="statusLabel">Study Mode</span>
+            <span class="status-spacer"></span>
+            <div class="mode-toggle" id="modeToggle">
+                <button class="active" id="btnLearn" onclick="switchMode('learn')">Learn</button>
+                <button id="btnSolve" onclick="switchMode('solve')">Solve</button>
+            </div>
+            <button class="stop-btn" onclick="stopStudy()" title="Stop session">
+                <svg width="8" height="8" viewBox="0 0 8 8"><rect width="8" height="8" rx="1.5" fill="currentColor"/></svg>
+            </button>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content-area" id="contentArea">
+            <div id="questionsContainer" style="display:none;"></div>
+            <div class="content" id="learnContent"></div>
+        </div>
 
         <script>
-        var isPaused = false;
-        var isAutoSolving = false;
+        var currentMode = 'learn';
+        var expandedSteps = {};
         var rawMarkdown = '';
         var smdParser = null;
-        var libsReady = false;
-        var pendingFinalize = false;
 
-        function checkLibs() {
-            if (window.marked && window.markedHighlight && window.hljs && window.DOMPurify) {
-                libsReady = true;
-                if (pendingFinalize) { pendingFinalize = false; doFinalize(); }
+        // SVG icons
+        var chevronDown = '<svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        var chevronUp = '<svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 5l4-4 4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        var copyIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="3.5" y="3.5" width="7" height="7" rx="1" stroke="currentColor" fill="none" stroke-width="1.2"/><path d="M8.5 3.5V2a1 1 0 00-1-1H2a1 1 0 00-1 1v5.5a1 1 0 001 1h1.5" stroke="currentColor" fill="none" stroke-width="1.2"/></svg>';
+        var checkIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6.5l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+        function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('btnSolve').classList.toggle('active', mode === 'solve');
+            document.getElementById('btnLearn').classList.toggle('active', mode === 'learn');
+
+            // Hide summary if visible
+            var summary = document.getElementById('summaryContainer');
+            if (summary) summary.style.display = 'none';
+
+            document.getElementById('questionsContainer').style.display = mode === 'solve' ? '' : 'none';
+            document.getElementById('learnContent').style.display = mode === 'learn' ? '' : 'none';
+
+            // Adjust content area bottom to reclaim input field space in solve mode
+            var contentArea = document.getElementById('contentArea');
+            if (mode === 'solve') {
+                contentArea.style.bottom = '0px';
+            } else {
+                contentArea.style.bottom = '48px';
             }
+
+            window.webkit.messageHandlers.overlay.postMessage({action:'studyModeSwitch', mode: mode});
         }
 
-        function togglePause() {
-            isPaused = !isPaused;
-            document.getElementById('pauseBtn').textContent = isPaused ? 'Resume' : 'Pause';
-            document.getElementById('statusDot').className = isPaused ? 'study-dot paused' : 'study-dot';
-            document.getElementById('statusLabel').textContent = isPaused ? 'Paused' : 'Study Mode';
-            window.webkit.messageHandlers.overlay.postMessage({action:'studyPause'});
-        }
-        function toggleAutoSolve() {
-            isAutoSolving = !isAutoSolving;
-            var btn = document.getElementById('autoSolveBtn');
-            btn.textContent = isAutoSolving ? 'Stop Solving' : 'Auto Solve';
-            btn.classList.toggle('active', isAutoSolving);
-            window.webkit.messageHandlers.overlay.postMessage({action:'studyAutoSolve'});
-        }
         function stopStudy() {
             window.webkit.messageHandlers.overlay.postMessage({action:'studyStop'});
         }
-        function collapseResponse() {
-            window.webkit.messageHandlers.overlay.postMessage({action:'studyCollapse'});
+
+        function updateStatus(text, dotState) {
+            document.getElementById('statusLabel').textContent = text;
+            var dot = document.getElementById('activityDot');
+            dot.className = 'activity-dot';
+            if (dotState === 'paused') dot.classList.add('paused');
+            else if (dotState === 'solving') dot.classList.add('solving');
         }
 
-        function showResponseArea() {
-            document.getElementById('responseArea').classList.add('visible');
-            document.getElementById('collapseBtn').style.display = 'inline';
-            var el = document.querySelector('.content');
-            el.innerHTML = '<div class="loading"><div class="spinner"></div><span class="loading-text">Analyzing\\u2026</span></div>';
-            rawMarkdown = '';
-            smdParser = null;
+        function showContentArea() {
+            document.getElementById('contentArea').classList.add('visible');
         }
-        function hideResponseArea() {
-            document.getElementById('responseArea').classList.remove('visible');
-            document.getElementById('collapseBtn').style.display = 'none';
-            document.querySelector('.content').innerHTML = '';
-            rawMarkdown = '';
-            smdParser = null;
+
+        function hideContentArea() {
+            document.getElementById('contentArea').classList.remove('visible');
+        }
+
+        // MARK: - Question Row Building
+
+        function buildQuestionRow(q) {
+            var row = document.createElement('div');
+            row.className = 'question-row' + (q.state === 'solving' ? ' solving' : '') + (q.state === 'failed' ? ' failed' : '');
+            row.setAttribute('data-id', q.id);
+            row.setAttribute('data-state', q.state);
+
+            var header = document.createElement('div');
+            header.className = 'row-header';
+
+            var num = document.createElement('span');
+            num.className = 'q-number';
+            num.textContent = q.id;
+            header.appendChild(num);
+
+            var answer = document.createElement('span');
+            answer.className = 'q-answer';
+
+            if (q.state === 'solving') {
+                answer.textContent = 'Solving...';
+            } else if (q.state === 'failed') {
+                answer.textContent = 'Could not solve';
+                var retry = document.createElement('a');
+                retry.className = 'retry-link';
+                retry.textContent = 'Retry';
+                retry.href = '#';
+                (function(id) {
+                    retry.onclick = function(e) {
+                        e.preventDefault();
+                        window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id: id});
+                    };
+                })(q.id);
+                answer.appendChild(document.createTextNode(' \\u00B7 '));
+                answer.appendChild(retry);
+            } else if (q.state === 'solved' && q.latex) {
+                var mathNode = document.createTextNode('\\\\(' + q.latex + '\\\\)');
+                answer.appendChild(mathNode);
+            } else if (q.state === 'pending') {
+                answer.textContent = '';
+                answer.style.color = 'var(--text-tertiary)';
+            }
+
+            header.appendChild(answer);
+
+            // Actions (hover-visible)
+            if (q.state === 'solved') {
+                var actions = document.createElement('div');
+                actions.className = 'row-actions';
+
+                // Expand/collapse chevron
+                var expandBtn = document.createElement('button');
+                expandBtn.className = 'action-btn';
+                expandBtn.innerHTML = expandedSteps[q.id] ? chevronDown : chevronUp;
+                (function(id, btn) {
+                    expandBtn.onclick = function() {
+                        toggleSteps(id, btn);
+                    };
+                })(q.id, expandBtn);
+                actions.appendChild(expandBtn);
+
+                // Copy button
+                if (q.copyable) {
+                    var copyBtn = document.createElement('button');
+                    copyBtn.className = 'action-btn';
+                    copyBtn.innerHTML = copyIcon;
+                    (function(text, btn) {
+                        copyBtn.onclick = function() { doCopy(text, btn); };
+                    })(q.copyable, copyBtn);
+                    actions.appendChild(copyBtn);
+                }
+
+                header.appendChild(actions);
+            }
+
+            row.appendChild(header);
+
+            // Steps container (always present for solved, hidden by default)
+            if (q.state === 'solved') {
+                var stepsContainer = document.createElement('div');
+                stepsContainer.className = 'steps-container' + (expandedSteps[q.id] ? ' expanded' : '');
+                stepsContainer.id = 'steps-' + q.id;
+
+                if (expandedSteps[q.id] && q.steps && q.steps.length > 0) {
+                    renderSteps(stepsContainer, q.steps);
+                } else if (expandedSteps[q.id]) {
+                    stepsContainer.innerHTML = '<div class="steps-loading">Loading steps...</div>';
+                }
+
+                row.appendChild(stepsContainer);
+            }
+
+            return row;
+        }
+
+        function renderSteps(container, steps) {
+            container.innerHTML = '';
+            for (var i = 0; i < steps.length; i++) {
+                var s = steps[i];
+                var step = document.createElement('div');
+                step.className = 'step' + (s.isKeyStep ? ' key-step' : '');
+
+                var stepNum = document.createElement('span');
+                stepNum.className = 'step-number';
+                stepNum.textContent = s.stepNumber + '.';
+                step.appendChild(stepNum);
+
+                var stepContent = document.createElement('div');
+                stepContent.className = 'step-content';
+
+                var stepMath = document.createElement('div');
+                stepMath.className = 'step-math';
+                stepMath.appendChild(document.createTextNode('\\\\(' + s.latex + '\\\\)'));
+                stepContent.appendChild(stepMath);
+
+                var stepExpl = document.createElement('div');
+                stepExpl.className = 'step-explanation';
+                stepExpl.textContent = s.explanation;
+                stepContent.appendChild(stepExpl);
+
+                step.appendChild(stepContent);
+                container.appendChild(step);
+            }
+            typesetElement(container);
+        }
+
+        function toggleSteps(id, btn) {
+            var container = document.getElementById('steps-' + id);
+            if (!container) return;
+            if (expandedSteps[id]) {
+                expandedSteps[id] = false;
+                container.classList.remove('expanded');
+                btn.innerHTML = chevronUp;
+            } else {
+                expandedSteps[id] = true;
+                container.classList.add('expanded');
+                btn.innerHTML = chevronDown;
+                // Request steps if not loaded
+                if (container.querySelector('.steps-loading') || container.children.length === 0) {
+                    container.innerHTML = '<div class="steps-loading">Loading steps...</div>';
+                    window.webkit.messageHandlers.overlay.postMessage({action:'studyExpandSteps', id: id});
+                }
+            }
+        }
+
+        function updateSteps(id, steps) {
+            var container = document.getElementById('steps-' + id);
+            if (!container) return;
+            if (steps && steps.length > 0) {
+                renderSteps(container, steps);
+            } else {
+                container.innerHTML = '<div class="step-explanation">No steps available</div>';
+            }
+        }
+
+        function doCopy(text, btn) {
+            window.webkit.messageHandlers.overlay.postMessage({action:'copy', text: text});
+            btn.innerHTML = checkIcon;
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.innerHTML = copyIcon;
+                btn.classList.remove('copied');
+            }, 1500);
+        }
+
+        // MARK: - Full Refresh
+
+        function refreshStudyUI(statusText, dotState, questions) {
+            updateStatus(statusText, dotState);
+            var container = document.getElementById('questionsContainer');
+            container.innerHTML = '';
+
+            var lastPage = -1;
+            for (var i = 0; i < questions.length; i++) {
+                var q = questions[i];
+                // Page divider
+                if (q.page !== lastPage && lastPage !== -1) {
+                    var divider = document.createElement('div');
+                    divider.className = 'page-divider';
+                    divider.innerHTML = '<span>Page ' + q.page + '</span>';
+                    container.appendChild(divider);
+                }
+                lastPage = q.page;
+
+                var row = buildQuestionRow(q);
+                row.style.opacity = '0';
+                row.style.transform = 'translateX(12px)';
+                row.style.transition = 'opacity 0.25s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                container.appendChild(row);
+
+                // Staggered entrance
+                (function(r, idx) {
+                    setTimeout(function() {
+                        r.style.opacity = '1';
+                        r.style.transform = 'translateX(0)';
+                    }, idx * 60);
+                })(row, i);
+            }
+
+            // Typeset MathJax
+            typesetElement(container);
+
+            // Only show questions container if in solve mode
+            if (currentMode === 'solve') {
+                container.style.display = '';
+                document.getElementById('learnContent').style.display = 'none';
+                showContentArea();
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        // Update a single row without full rebuild
+        function updateQuestionRow(q) {
+            var existing = document.querySelector('[data-id="' + q.id + '"]');
+            if (!existing) {
+                // New row — append with animation
+                var newRow = buildQuestionRow(q);
+                newRow.style.opacity = '0';
+                newRow.style.transform = 'translateX(12px)';
+                newRow.style.transition = 'opacity 0.25s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                document.getElementById('questionsContainer').appendChild(newRow);
+                setTimeout(function() { newRow.style.opacity = '1'; newRow.style.transform = 'translateX(0)'; }, 30);
+                typesetElement(newRow);
+                return;
+            }
+
+            // Existing row — update in-place with cross-fade
+            var wasState = existing.getAttribute('data-state') || '';
+            if (wasState === q.state) return;
+
+            existing.setAttribute('data-state', q.state);
+            existing.className = 'question-row' + (q.state === 'solving' ? ' solving' : '') + (q.state === 'failed' ? ' failed' : '');
+
+            var answerEl = existing.querySelector('.q-answer');
+            if (!answerEl) return;
+
+            answerEl.style.transition = 'opacity 0.15s ease';
+            answerEl.style.opacity = '0';
+
+            setTimeout(function() {
+                if (q.state === 'solving') {
+                    answerEl.textContent = 'Solving...';
+                } else if (q.state === 'failed') {
+                    answerEl.innerHTML = 'Could not solve';
+                    var retry = document.createElement('a');
+                    retry.className = 'retry-link';
+                    retry.textContent = 'Retry';
+                    retry.href = '#';
+                    retry.onclick = function(e) { e.preventDefault(); window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id: q.id}); };
+                    answerEl.appendChild(document.createTextNode(' \\u00B7 '));
+                    answerEl.appendChild(retry);
+                } else if (q.state === 'solved' && q.latex) {
+                    answerEl.innerHTML = '';
+                    answerEl.appendChild(document.createTextNode('\\\\(' + q.latex + '\\\\)'));
+
+                    var actions = existing.querySelector('.row-actions');
+                    if (!actions) {
+                        actions = document.createElement('div');
+                        actions.className = 'row-actions';
+                        existing.querySelector('.row-header').appendChild(actions);
+                    }
+                    actions.innerHTML = '';
+                    var expandBtn = document.createElement('button');
+                    expandBtn.className = 'action-btn';
+                    expandBtn.innerHTML = chevronUp;
+                    expandBtn.onclick = function() { toggleSteps(q.id, expandBtn); };
+                    actions.appendChild(expandBtn);
+                    if (q.copyable) {
+                        var copyBtn = document.createElement('button');
+                        copyBtn.className = 'action-btn';
+                        copyBtn.innerHTML = copyIcon;
+                        copyBtn.onclick = function() { doCopy(q.copyable, copyBtn); };
+                        actions.appendChild(copyBtn);
+                    }
+                    if (!document.getElementById('steps-' + q.id)) {
+                        var sc = document.createElement('div');
+                        sc.className = 'steps-container';
+                        sc.id = 'steps-' + q.id;
+                        existing.appendChild(sc);
+                    }
+                }
+                answerEl.style.opacity = '1';
+                typesetElement(answerEl);
+            }, 150);
+        }
+
+        // MARK: - Session Summary
+
+        function showSessionSummary(data) {
+            // Hide both mode containers — summary is mode-independent
+            document.getElementById('questionsContainer').style.display = 'none';
+            document.getElementById('learnContent').style.display = 'none';
+
+            var existing = document.getElementById('summaryContainer');
+            if (existing) existing.remove();
+
+            var summaryEl = document.createElement('div');
+            summaryEl.id = 'summaryContainer';
+            summaryEl.style.display = 'block';
+            document.getElementById('contentArea').appendChild(summaryEl);
+
+            var card = document.createElement('div');
+            card.className = 'summary-card';
+            card.style.opacity = '0';
+            card.style.transform = 'translateY(8px)';
+            card.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+
+            card.innerHTML =
+                '<div class="summary-title">Session Complete</div>' +
+                '<div class="summary-stats">' +
+                    '<div class="stat"><span class="stat-value">' + data.duration + '</span><span class="stat-label">Duration</span></div>' +
+                    '<div class="stat"><span class="stat-value">' + data.solved + '</span><span class="stat-label">Solved</span></div>' +
+                    '<div class="stat"><span class="stat-value">' + data.pages + '</span><span class="stat-label">Pages</span></div>' +
+                    '<div class="stat"><span class="stat-value">' + (data.topics ? data.topics.length : 0) + '</span><span class="stat-label">Topics</span></div>' +
+                '</div>';
+
+            if (data.topics && data.topics.length > 0) {
+                var topicsDiv = document.createElement('div');
+                topicsDiv.className = 'summary-topics';
+                for (var i = 0; i < data.topics.length; i++) {
+                    var tag = document.createElement('span');
+                    tag.className = 'topic-tag';
+                    tag.textContent = data.topics[i];
+                    topicsDiv.appendChild(tag);
+                }
+                card.appendChild(topicsDiv);
+            }
+
+            summaryEl.appendChild(card);
+            showContentArea();
+            setTimeout(function() {
+                card.style.opacity = '1';
+                card.style.transform = 'translateY(0)';
+            }, 50);
+        }
+
+        // MARK: - Learn Mode Streaming
+
+        function showUserInput(text) {
+            var el = document.getElementById('learnContent');
+            el.innerHTML = '';
+            el.style.display = '';
+            document.getElementById('questionsContainer').style.display = 'none';
+
+            var echo = document.createElement('div');
+            echo.className = 'user-input-echo';
+            echo.id = 'currentUserInput';
+            var bubble = document.createElement('div');
+            bubble.className = 'user-input-text';
+            bubble.textContent = text;
+            echo.appendChild(bubble);
+            el.appendChild(echo);
+
+            var responseContainer = document.createElement('div');
+            responseContainer.id = 'learnResponseContainer';
+            responseContainer.className = 'content';
+            responseContainer.style.padding = '4px 14px';
+            el.appendChild(responseContainer);
+
+            showContentArea();
         }
 
         function appendChunk(text) {
-            var el = document.querySelector('.content');
+            var container = document.getElementById('learnResponseContainer');
+            if (!container) container = document.getElementById('learnContent');
             if (!smdParser) {
-                el.innerHTML = '';
-                var renderer = smd.default_renderer(el);
+                var renderer = smd.default_renderer(container);
                 smdParser = smd.parser(renderer);
             }
             rawMarkdown += text;
             smd.parser_write(smdParser, text);
-            // Auto-scroll
-            var area = document.getElementById('responseArea');
+            var area = document.getElementById('contentArea');
             area.scrollTop = area.scrollHeight;
         }
 
         function finalize() {
             if (smdParser) { smd.parser_end(smdParser); }
-            if (!libsReady) { checkLibs(); }
-            if (libsReady) { doFinalize(); }
-            else {
-                pendingFinalize = true;
-                setTimeout(function() {
-                    if (pendingFinalize) { pendingFinalize = false; runMathJax(); }
-                }, 5000);
-            }
+            doFullFinalize();
         }
 
-        function doFinalize() {
-            if (!window.marked || !window.hljs) { runMathJax(); return; }
-            var inst = new marked.Marked(
-                markedHighlight.markedHighlight({
-                    emptyLangClass: 'hljs', langPrefix: 'hljs language-',
-                    highlight: function(code, lang) {
-                        if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, {language:lang}).value;
-                        return hljs.highlightAuto(code).value;
-                    }
-                })
-            );
-            var renderer = new marked.Renderer();
-            renderer.link = function(d) {
-                var h = d.href||'', t = d.title?' title="'+d.title+'"':'', x = d.text||'';
-                return '<a href="'+h+'"'+t+' target="_blank" rel="noopener noreferrer">'+x+'</a>';
-            };
-            inst.use({renderer:renderer});
+        function doFullFinalize() {
+            if (!rawMarkdown.trim()) return;
 
+            var el = document.getElementById('learnResponseContainer');
+            if (!el) el = document.getElementById('learnContent');
+
+            // If marked isn't loaded yet, just do MathJax on the raw smd output
+            if (!window.marked || !window.DOMPurify) {
+                typesetElement(el);
+                rawMarkdown = '';
+                smdParser = null;
+                return;
+            }
+
+            // Step 1: Extract all math blocks into placeholders before markdown parsing
             var mathStore = [];
-            var processed = rawMarkdown;
-            function extractMath(text,open,close,store) {
-                var s=0;
-                while(s<text.length){var a=text.indexOf(open,s);if(a===-1)break;var b=text.indexOf(close,a+open.length);if(b===-1)break;var m=text.substring(a,b+close.length);var ph='%%MATH_'+store.length+'%%';store.push(m);text=text.substring(0,a)+ph+text.substring(b+close.length);s=a+ph.length;}
+
+            function extractMath(text, open, close, store) {
+                var s = 0;
+                while (s < text.length) {
+                    var a = text.indexOf(open, s);
+                    if (a === -1) break;
+                    var b = text.indexOf(close, a + open.length);
+                    if (b === -1) break;
+                    var m = text.substring(a, b + close.length);
+                    var ph = '%%MATH_' + store.length + '%%';
+                    store.push(m);
+                    text = text.substring(0, a) + ph + text.substring(b + close.length);
+                    s = a + ph.length;
+                }
                 return text;
             }
-            processed=extractMath(processed,'$$','$$',mathStore);
-            var pos=0;
-            while(pos<processed.length){var a=processed.indexOf('$',pos);if(a===-1)break;var nl=processed.indexOf('\\n',a+1);var lim=(nl===-1)?processed.length:nl;var b=processed.indexOf('$',a+1);if(b===-1||b>=lim){pos=a+1;continue;}var m=processed.substring(a,b+1);var ph='%%MATH_'+mathStore.length+'%%';mathStore.push(m);processed=processed.substring(0,a)+ph+processed.substring(b+1);pos=a+ph.length;}
-            processed=extractMath(processed,'\\\\[','\\\\]',mathStore);
-            processed=extractMath(processed,'\\\\(','\\\\)',mathStore);
-            var raw=inst.parse(processed);
-            var safe=DOMPurify.sanitize(raw,{ADD_ATTR:['target']});
-            for(var i=0;i<mathStore.length;i++){safe=safe.split('%%MATH_'+i+'%%').join(mathStore[i]);}
-            document.querySelector('.content').innerHTML=safe;
-            runMathJax();
+
+            var processed = rawMarkdown;
+
+            // Extract display math first (greedy), then inline
+            processed = extractMath(processed, '$$', '$$', mathStore);
+
+            // Extract single $ inline math (same-line only)
+            var pos = 0;
+            while (pos < processed.length) {
+                var a = processed.indexOf('$', pos);
+                if (a === -1) break;
+                if (a >= 2 && processed.substring(a - 2, a) === '%%') { pos = a + 1; continue; }
+                var nl = processed.indexOf('\\n', a + 1);
+                var lim = (nl === -1) ? processed.length : nl;
+                var b = processed.indexOf('$', a + 1);
+                if (b === -1 || b >= lim) { pos = a + 1; continue; }
+                var m = processed.substring(a, b + 1);
+                var ph = '%%MATH_' + mathStore.length + '%%';
+                mathStore.push(m);
+                processed = processed.substring(0, a) + ph + processed.substring(b + 1);
+                pos = a + ph.length;
+            }
+
+            processed = extractMath(processed, '\\\\[', '\\\\]', mathStore);
+            processed = extractMath(processed, '\\\\(', '\\\\)', mathStore);
+
+            // Step 2: Parse markdown
+            var raw = marked.parse(processed);
+
+            // Step 3: Sanitize
+            var safe = DOMPurify.sanitize(raw, { ADD_ATTR: ['target'] });
+
+            // Step 4: Re-insert math blocks
+            for (var i = 0; i < mathStore.length; i++) {
+                safe = safe.split('%%MATH_' + i + '%%').join(mathStore[i]);
+            }
+
+            // Step 5: Set HTML and typeset
+            el.innerHTML = safe;
+            typesetElement(el);
+
+            rawMarkdown = '';
+            smdParser = null;
         }
 
-        function runMathJax() {
-            var el=document.querySelector('.content');
-            if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetClear([el]);MathJax.typesetPromise([el]).catch(function(){});}
-            else if(window.MathJax&&MathJax.startup&&MathJax.startup.promise){MathJax.startup.promise.then(function(){MathJax.typesetClear([el]);MathJax.typesetPromise([el]).catch(function(){});});}
+        function clearLearnContent() {
+            document.getElementById('learnContent').innerHTML = '';
+            rawMarkdown = '';
+            smdParser = null;
         }
+
+        // Show explain card
+        function showExplainCard(data) {
+            var el = document.getElementById('learnContent');
+            el.style.display = '';
+            document.getElementById('questionsContainer').style.display = 'none';
+            var echo = document.getElementById('currentUserInput');
+            el.innerHTML = '';
+            if (echo) el.appendChild(echo);
+
+            var card = document.createElement('div');
+            card.className = 'concept-card';
+            card.innerHTML = '<div class="concept-title">' + escapeHtml(data.conceptName) + '</div>';
+            card.innerHTML += '<div class="concept-body">' + escapeHtml(data.conceptExplanation) + '</div>';
+            if (data.formulaLatex) {
+                card.innerHTML += '<div class="concept-formula">\\\\[' + data.formulaLatex + '\\\\]</div>';
+            }
+            if (data.strategy) {
+                card.innerHTML += '<div class="concept-body" style="font-style:italic;margin-top:4px;">' + escapeHtml(data.strategy) + '</div>';
+            }
+            if (data.commonMistakes && data.commonMistakes.length > 0) {
+                var mHtml = '<div style="margin-top:8px;"><div class="similar-example-label">Common Mistakes</div>';
+                for (var i = 0; i < data.commonMistakes.length; i++) {
+                    mHtml += '<div class="concept-body" style="padding:2px 0;">\\u2022 ' + escapeHtml(data.commonMistakes[i]) + '</div>';
+                }
+                mHtml += '</div>';
+                card.innerHTML += mHtml;
+            }
+            el.appendChild(card);
+            typesetElement(el);
+            showContentArea();
+        }
+
+        // Show check feedback
+        function showCheckFeedback(data) {
+            var el = document.getElementById('learnContent');
+            el.style.display = '';
+            document.getElementById('questionsContainer').style.display = 'none';
+            var echo = document.getElementById('currentUserInput');
+            el.innerHTML = '';
+            if (echo) el.appendChild(echo);
+
+            var card = document.createElement('div');
+            card.className = 'feedback-card';
+
+            var scoreColor = data.correctnessPercentage >= 80 ? 'var(--accent-green)' :
+                             data.correctnessPercentage >= 50 ? 'var(--accent-amber)' : 'var(--text-tertiary)';
+
+            var safeFeedback = window.DOMPurify ? DOMPurify.sanitize(data.feedback) : escapeHtml(data.feedback);
+
+            card.innerHTML =
+                '<div class="feedback-score">' +
+                    '<span style="font:600 18px/1 -apple-system,sans-serif;color:' + scoreColor + ';">' + data.correctnessPercentage + '%</span>' +
+                    '<div class="score-bar"><div class="score-fill" style="width:0%;background:' + scoreColor + '"></div></div>' +
+                '</div>' +
+                '<div class="feedback-text">' + safeFeedback + '</div>';
+            if (data.correctFromError) {
+                var safeCorr = window.DOMPurify ? DOMPurify.sanitize(data.correctFromError) : escapeHtml(data.correctFromError);
+                card.innerHTML += '<div style="margin-top:8px;padding:8px 10px;background:var(--control-bg);border-radius:6px;">' +
+                    '<div class="similar-example-label">Correction</div>' +
+                    '<div class="feedback-text">' + safeCorr + '</div></div>';
+            }
+            if (data.encouragement) {
+                card.innerHTML += '<div class="feedback-text" style="margin-top:8px;font-style:italic;color:var(--text-tertiary);">' + escapeHtml(data.encouragement) + '</div>';
+            }
+            el.appendChild(card);
+            setTimeout(function() {
+                var fill = card.querySelector('.score-fill');
+                if (fill) fill.style.width = data.correctnessPercentage + '%';
+            }, 100);
+            typesetElement(el);
+            showContentArea();
+        }
+
+        // Normalize LaTeX delimiters: $...$ → \\(...\\), $$...$$ → \\[...\\]
+        function normalizeLatex(text) {
+            if (!text) return '';
+            text = text.replace(/\\$\\$([\\s\\S]*?)\\$\\$/g, '\\\\\\\\[$1\\\\\\\\]');
+            text = text.replace(/\\$([^\\$]*?)\\$/g, '\\\\\\\\($1\\\\\\\\)');
+            return text;
+        }
+
+        // Show quiz card
+        var quizData = [];
+        function showQuizCard(questions) {
+            quizData = questions;
+            var el = document.getElementById('learnContent');
+            el.style.display = '';
+            document.getElementById('questionsContainer').style.display = 'none';
+            var echo = document.getElementById('currentUserInput');
+            el.innerHTML = '';
+            if (echo) el.appendChild(echo);
+
+            var card = document.createElement('div');
+            card.className = 'concept-card';
+            card.innerHTML = '<div class="concept-title">Practice Quiz</div>';
+            card.innerHTML += '<div class="concept-body" style="margin-bottom:8px;">' + questions.length + ' questions based on your session topics</div>';
+
+            for (var i = 0; i < questions.length; i++) {
+                var q = questions[i];
+                var qDiv = document.createElement('div');
+                qDiv.style.cssText = 'padding:8px 0;border-top:0.5px solid var(--separator);';
+
+                var questionDisplay = normalizeLatex(q.questionLatex);
+                if (questionDisplay.indexOf('\\\\(') === -1 && questionDisplay.indexOf('\\\\[') === -1) {
+                    questionDisplay = '\\\\(' + questionDisplay + '\\\\)';
+                }
+
+                qDiv.innerHTML =
+                    '<div style="font:500 12px/1.5 -apple-system,sans-serif;color:var(--text-primary);margin-bottom:4px;">' +
+                        '<span style="color:var(--text-tertiary);margin-right:6px;">' + q.quizId + '</span>' +
+                        questionDisplay +
+                    '</div>' +
+                    '<div style="display:flex;gap:6px;align-items:center;">' +
+                        '<input type="text" id="quiz-input-' + q.quizId + '" ' +
+                            'style="flex:1;background:var(--control-bg);border:0.5px solid var(--separator);border-radius:6px;' +
+                            'padding:6px 10px;font:400 12px/1 -apple-system,sans-serif;color:var(--text-primary);outline:none;" ' +
+                            'placeholder="Your answer...">' +
+                        '<button onclick="checkQuizAnswer(\\'' + q.quizId + '\\')" ' +
+                            'style="background:var(--control-bg);border:0.5px solid var(--separator);border-radius:6px;' +
+                            'padding:6px 10px;font:500 11px/1 -apple-system,sans-serif;color:var(--text-secondary);cursor:pointer;">Check</button>' +
+                    '</div>' +
+                    '<div id="quiz-result-' + q.quizId + '" style="display:none;margin-top:4px;font:400 11px/1.4 -apple-system,sans-serif;"></div>';
+                card.appendChild(qDiv);
+            }
+            el.appendChild(card);
+            typesetElement(el);
+            showContentArea();
+        }
+
+        function checkQuizAnswer(quizId) {
+            var input = document.getElementById('quiz-input-' + quizId);
+            var resultDiv = document.getElementById('quiz-result-' + quizId);
+            if (!input || !resultDiv) return;
+            var userAnswer = input.value.trim();
+            if (!userAnswer) return;
+            var question = quizData.find(function(q) { return q.quizId === quizId; });
+            if (!question) return;
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML =
+                '<div style="color:var(--text-secondary);">Correct answer: ' + normalizeLatex(question.correctAnswerLatex) + '</div>' +
+                (question.hint ? '<div style="color:var(--text-tertiary);font-style:italic;margin-top:2px;">' + escapeHtml(question.hint) + '</div>' : '');
+            typesetElement(resultDiv);
+            window.webkit.messageHandlers.overlay.postMessage({action:'quizAnswer', quizId:quizId, userAnswer:userAnswer});
+        }
+
+        // MARK: - Helpers
+
+        function typesetElement(el) {
+            if (window.MathJax && MathJax.typesetPromise) {
+                MathJax.typesetClear([el]);
+                MathJax.typesetPromise([el]).catch(function(){});
+            } else if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
+                MathJax.startup.promise.then(function() {
+                    MathJax.typesetClear([el]);
+                    MathJax.typesetPromise([el]).catch(function(){});
+                });
+            }
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        // Legacy compat — old coordinator calls these
+        function showResponseArea() { showContentArea(); }
+        function hideResponseArea() { hideContentArea(); }
+        function showAutosolvePanel() {}
+        function clearAutosolvePanel() {}
+        function refreshAutoSolveUI(headerText, answers) {
+            // Convert old format to new
+            var qs = [];
+            for (var i = 0; i < answers.length; i++) {
+                var a = answers[i];
+                qs.push({
+                    id: a.id,
+                    state: a.solving ? 'solving' : (a.failed ? 'failed' : 'solved'),
+                    latex: a.latex,
+                    copyable: a.copyable,
+                    page: a.page,
+                    steps: null
+                });
+            }
+            refreshStudyUI(headerText, 'active', qs);
+        }
+
         </script>
 
-        <body>
-        <div class="drag-bar">
-            <img class="logo" src="data:image/png;base64,\(iconB64)">
-            <span class="study-status"><span class="study-dot" id="statusDot"></span><span id="statusLabel">Study Mode</span></span>
-            <span class="drag-spacer"></span>
-            <div class="study-controls">
-                <button class="collapse-btn" id="collapseBtn" style="display:none" onclick="collapseResponse()">Collapse</button>
-                <button class="study-btn" id="autoSolveBtn" onclick="toggleAutoSolve()">Auto Solve</button>
-                <button class="study-btn disabled-btn" disabled title="Auto-Locate (Beta) \u{2014} Coming Soon">aLbeta</button>
-                <button class="study-btn" id="pauseBtn" onclick="togglePause()">Pause</button>
-                <button class="study-btn" id="stopBtn" onclick="stopStudy()">Stop</button>
-            </div>
-        </div>
-        <div class="response-area" id="responseArea"><div id="autosolve-panel"><div class="autosolve-header" id="autosolve-header"></div><div id="autosolve-rows"></div></div><div class="content"></div></div>
         <script>
-        document.querySelector('.drag-bar').addEventListener('mousedown', function(e) {
-            if (e.target.closest('.study-controls') || e.target.closest('.collapse-btn') || e.target.closest('.logo')) return;
+        // Drag handling
+        document.querySelector('.status-bar').addEventListener('mousedown', function(e) {
+            if (e.target.closest('.mode-toggle') || e.target.closest('.stop-btn')) return;
             e.preventDefault();
             window.webkit.messageHandlers.overlay.postMessage({action:'dragStart', x: e.screenX, y: e.screenY});
             function onUp() {
@@ -1814,107 +3351,17 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
             }
             document.addEventListener('mouseup', onUp);
         });
+        // Nudge click — status label shows "Need help with Q1B?"
+        document.getElementById('statusLabel').addEventListener('click', function() {
+            var text = this.textContent;
+            if (text.startsWith('Need help with Q')) {
+                var match = text.match(/Need help with Q(.+)\\?/);
+                if (match) {
+                    window.webkit.messageHandlers.overlay.postMessage({action:'nudgeAccepted', id: match[1]});
+                }
+            }
+        });
         setTheme(\(isDarkMode));
-
-        function showAutosolvePanel(count) {
-            var panel = document.getElementById('autosolve-panel');
-            var hdr = document.getElementById('autosolve-header');
-            document.getElementById('autosolve-rows').textContent = '';
-            hdr.textContent = count === 0 ? 'Auto Solve \\u2014 all solved' : 'Auto Solve \\u2014 ' + count + ' answers';
-            panel.style.display = 'block';
-            document.querySelector('.content').style.display = 'none';
-            document.getElementById('responseArea').classList.add('visible');
-        }
-        function clearAutosolvePanel() {
-            document.getElementById('autosolve-panel').style.display = 'none';
-            document.querySelector('.content').style.display = '';
-            document.getElementById('responseArea').classList.remove('visible');
-        }
-        function buildAnswerRow(id, latex, copyable, isMC, failed, solving) {
-            var div = document.createElement('div');
-            div.className = solving ? 'answer-row solving' : (failed ? 'answer-row error' : 'answer-row');
-            div.setAttribute('data-id', String(id));
-            var qnum = document.createElement('span');
-            qnum.className = 'q-num';
-            qnum.textContent = id + ':';
-            div.appendChild(qnum);
-            if (solving) {
-                var pend = document.createElement('span');
-                pend.className = 'answer-pending';
-                pend.textContent = '\\u23F3 solving...';
-                div.appendChild(pend);
-            } else if (failed) {
-                var errSpan = document.createElement('span');
-                errSpan.className = 'answer-error';
-                errSpan.textContent = 'Failed \\u2014 tap to retry';
-                div.appendChild(errSpan);
-                var rb = document.createElement('button');
-                rb.className = 'as-resolve-btn';
-                rb.textContent = '\\u21BB';
-                (function(i) { rb.onclick = function() { resolveAnswer(i); }; })(id);
-                div.appendChild(rb);
-            } else {
-                var ans = document.createElement('span');
-                ans.className = 'answer';
-                var mathNode = document.createTextNode('\\\\(' + latex + '\\\\)');
-                ans.appendChild(mathNode);
-                div.appendChild(ans);
-                if (!isMC) {
-                    var cb = document.createElement('button');
-                    cb.className = 'as-copy-btn';
-                    cb.textContent = '\\uD83D\\uDCCB';
-                    (function(c) { cb.onclick = function() { copyAutoAnswer(c); }; })(copyable);
-                    div.appendChild(cb);
-                }
-                var rb2 = document.createElement('button');
-                rb2.className = 'as-resolve-btn';
-                rb2.textContent = '\\u21BB';
-                (function(i) { rb2.onclick = function() { resolveAnswer(i); }; })(id);
-                div.appendChild(rb2);
-            }
-            return div;
-        }
-        function appendAutosolveAnswer(id, latex, copyable, isMC) {
-            var row = buildAnswerRow(id, latex, copyable, isMC, false, false);
-            document.getElementById('autosolve-rows').appendChild(row);
-            if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
-        }
-        function replaceAutosolveAnswer(id, latex, copyable, isMC) {
-            var existing = document.querySelector('[data-id="' + id + '"]');
-            var row = buildAnswerRow(id, latex, copyable, isMC, false, false);
-            if (existing) { existing.parentNode.replaceChild(row, existing); }
-            else { document.getElementById('autosolve-rows').appendChild(row); }
-            if (window.MathJax && MathJax.typesetPromise) { MathJax.typesetPromise([row]).catch(function(){}); }
-        }
-        function copyAutoAnswer(text) {
-            window.webkit.messageHandlers.overlay.postMessage({action:'copy', text:text});
-        }
-        function resolveAnswer(id) {
-            window.webkit.messageHandlers.overlay.postMessage({action:'autoSolveResolve', id:id});
-        }
-        function refreshAutoSolveUI(headerText, answers) {
-            document.getElementById('autosolve-panel').style.display = 'block';
-            document.querySelector('.content').style.display = 'none';
-            document.getElementById('responseArea').classList.add('visible');
-            document.getElementById('autosolve-header').textContent = headerText;
-            var container = document.getElementById('autosolve-rows');
-            container.textContent = '';
-            var lastPage = -1;
-            for (var i = 0; i < answers.length; i++) {
-                var a = answers[i];
-                if (a.page !== lastPage && lastPage !== -1) {
-                    var divider = document.createElement('div');
-                    divider.className = 'page-divider';
-                    divider.textContent = '\\u2500\\u2500 Page ' + a.page + ' \\u2500\\u2500';
-                    container.appendChild(divider);
-                }
-                lastPage = a.page;
-                container.appendChild(buildAnswerRow(a.id, a.latex, a.copyable, a.isMC, a.failed, a.solving));
-            }
-            if (window.MathJax && MathJax.typesetPromise) {
-                MathJax.typesetPromise([container]).catch(function(){});
-            }
-        }
         </script>
         </body></html>
         """

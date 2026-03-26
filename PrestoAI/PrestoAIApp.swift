@@ -321,6 +321,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.quickPromptCapture()
         }
         hotkeys.onEsc = { [weak self] in
+            // If study mode is active, end the session (which also dismisses)
+            if StudyCoordinator.shared.isActive {
+                StudyCoordinator.shared.endSession()
+            }
             self?.overlayManager?.dismiss()
         }
         hotkeys.onStudyModeToggle = { [weak self] in
@@ -360,10 +364,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         coord.onSessionEnded = { [weak self] summary in
-            self?.overlayManager?.dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self?.overlayManager?.showStudySummary(text: summary)
-            }
+            // Session summary is now shown inline by the coordinator
+            // Dismiss after delay — cancellable if a new session starts
+            self?.overlayManager?.dismissAfterDelay(5.0)
             self?.refreshMenuState()
         }
 
@@ -400,60 +403,136 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func onStudyModeActivated() {
-        // Show the Study Mode bar (persistent, compact, bottom-right)
+        // Wire input field — route through intent detection in Learn mode
         overlayManager?.onPromptSubmit = { [weak self] text in
             guard let self = self else { return }
-            StudyCoordinator.shared.recordQuestionAsked()
+            let coord = StudyCoordinator.shared
+            coord.recordQuestionAsked()
+            coord.recordUserActivity()
 
-            // Expand the bar to show the answer area
-            self.overlayManager?.expandStudyBar()
+            // In solve mode, input shouldn't be visible — but just in case
+            guard coord.currentMode == .learn else { return }
 
-            // Capture screen and stream into the study bar
-            Task {
-                guard let screenshot = await self.captureForStudyMode() else { return }
-                let contextPrefix = StudyCoordinator.shared.buildSessionContextPrompt() ?? ""
-                let fullPrompt = contextPrefix.isEmpty ? text : "\(contextPrefix)\n\nUser question: \(text)"
+            let intent = coord.detectIntent(text)
 
-                let (compressed, mediaType) = ImageCompressor.compress(screenshot)
-                let stateManager = AppStateManager.shared
-                let deviceID = stateManager.deviceID
-                let bodyDict: [String: Any] = [
-                    "image": compressed,
-                    "prompt": fullPrompt,
-                    "media_type": mediaType,
-                    "device_id": deviceID
-                ]
+            switch intent {
+            case .explain(let questionId):
+                self.overlayManager?.showUserInputEcho(text)
+                coord.handleExplainIntent(questionId: questionId)
 
-                var isFirstChunk = true
-                APIService.shared.sendScreenshot(screenshot, prompt: fullPrompt,
-                    onChunk: { [weak self] chunk in
-                        if isFirstChunk {
-                            isFirstChunk = false
-                        }
-                        self?.overlayManager?.appendChunk(chunk)
-                    },
-                    onComplete: { [weak self] queriesRemaining, state in
-                        Task { @MainActor in
-                            self?.overlayManager?.signalStreamEnd()
-                            stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
-                        }
-                    },
-                    onError: { [weak self] error in
-                        self?.overlayManager?.showError(error.localizedDescription)
+            case .check(let questionId, let userAttempt):
+                self.overlayManager?.showUserInputEcho(text)
+                coord.handleCheckIntent(questionId: questionId, userAttempt: userAttempt)
+
+            case .quiz(let topics):
+                self.overlayManager?.showUserInputEcho(text)
+                coord.handleQuizIntent(topics: topics)
+
+            case .solveOne(let questionId):
+                self.overlayManager?.showUserInputEcho(text)
+                coord.handleSolveOneIntent(questionId: questionId)
+
+            case .freeform(let freeText):
+                self.overlayManager?.expandStudyBar()
+                self.overlayManager?.showUserInputEcho(freeText)
+
+                let contextPrefix = coord.buildSessionContextPrompt() ?? ""
+                let fullPrompt = contextPrefix.isEmpty ? freeText : "\(contextPrefix)\n\nUser question: \(freeText)"
+
+                // Check if the question likely needs a screenshot
+                let lower = freeText.lowercased()
+                let needsScreenshot = lower.contains("this") || lower.contains("screen") ||
+                                      lower.contains("shown") || lower.contains("above") ||
+                                      lower.contains("diagram") || lower.contains("graph") ||
+                                      lower.contains("image") || lower.contains("picture") ||
+                                      lower.contains("look at") || lower.contains("see")
+
+                if needsScreenshot {
+                    Task {
+                        guard let screenshot = await self.captureForStudyMode() else { return }
+                        var isFirstChunk = true
+                        let stateManager = AppStateManager.shared
+                        APIService.shared.sendScreenshot(screenshot, prompt: fullPrompt,
+                            onChunk: { [weak self] chunk in
+                                if isFirstChunk { isFirstChunk = false }
+                                self?.overlayManager?.appendChunk(chunk)
+                            },
+                            onComplete: { [weak self] queriesRemaining, state in
+                                Task { @MainActor in
+                                    self?.overlayManager?.finalizeStream()
+                                    stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
+                                }
+                            },
+                            onError: { [weak self] error in
+                                self?.overlayManager?.appendChunk("\n\n*Error: \(error.localizedDescription)*")
+                                self?.overlayManager?.finalizeStream()
+                            }
+                        )
                     }
-                )
+                } else {
+                    // Fast path — text-only, no screenshot
+                    var isFirstChunk = true
+                    let stateManager = AppStateManager.shared
+                    APIService.shared.sendTextOnly(prompt: fullPrompt,
+                        onChunk: { [weak self] chunk in
+                            if isFirstChunk { isFirstChunk = false }
+                            self?.overlayManager?.appendChunk(chunk)
+                        },
+                        onComplete: { [weak self] queriesRemaining, state in
+                            Task { @MainActor in
+                                self?.overlayManager?.finalizeStream()
+                                stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
+                            }
+                        },
+                        onError: { [weak self] error in
+                            self?.overlayManager?.appendChunk("\n\n*Error: \(error.localizedDescription)*")
+                            self?.overlayManager?.finalizeStream()
+                        }
+                    )
+                }
             }
         }
+
+        // Pause/resume toggle
         overlayManager?.onStudyPauseToggle = {
             let c = StudyCoordinator.shared
             c.isPaused ? c.resume() : c.pause()
         }
+
+        // Auto-solve toggle (legacy compat)
         overlayManager?.onAutoSolveToggle = {
             StudyCoordinator.shared.toggleAutoSolve()
         }
+
+        // Stop session
         overlayManager?.onStudyStop = {
             StudyCoordinator.shared.endSession()
         }
+
+        // Mode switch (Solve ↔ Learn)
+        overlayManager?.onStudyModeSwitch = { [weak self] mode in
+            let studyMode: StudyMode = mode == "learn" ? .learn : .solve
+            StudyCoordinator.shared.recordUserActivity()
+            StudyCoordinator.shared.switchMode(to: studyMode)
+
+            // Show/hide input field and resize based on mode
+            if mode == "solve" {
+                self?.overlayManager?.hideStudyTextField()
+                self?.overlayManager?.resizeForCurrentContent()
+            } else {
+                self?.overlayManager?.showStudyTextField()
+                self?.overlayManager?.resizeToLearnMode()
+            }
+        }
+
+        // Step expansion (lazy loading)
+        overlayManager?.onStudyExpandSteps = { questionId in
+            StudyCoordinator.shared.loadStepsForQuestion(id: questionId)
+        }
+
+        // Retry failed question
+        // (already wired via autoSolveResolve message handler)
+
         overlayManager?.showPromptInput(studyMode: true)
         refreshMenuState()
     }
