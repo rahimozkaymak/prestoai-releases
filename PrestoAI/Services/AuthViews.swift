@@ -95,9 +95,32 @@ struct AccountView: View {
 
     var onSuccess: (String) -> Void  // Called with JWT token
     var openPromoField: Bool = false
+    var showBackButton: Bool = false
+    var onBack: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 0) {
+            // Back button (when opened from Settings)
+            if showBackButton {
+                HStack {
+                    Button(action: { onBack?() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Back")
+                                .font(.system(size: 13))
+                        }
+                        .foregroundColor(Theme.text3(colorScheme))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.top, 12)
+                .padding(.horizontal, 4)
+            }
+
+            Spacer()
+
             VStack(spacing: 8) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
@@ -116,8 +139,10 @@ struct AccountView: View {
             } else {
                 socialAuthSection
             }
+
+            Spacer()
         }
-        .padding(32)
+        .padding(.horizontal, 32)
         .frame(width: 420, height: 420)
         .background(Theme.bg(colorScheme))
         .onAppear { showPromoField = openPromoField }
@@ -125,30 +150,43 @@ struct AccountView: View {
 
     // MARK: - Social Auth (Primary)
 
-    private func authButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .medium))
-                Text(label)
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .foregroundColor(Theme.text1(colorScheme))
-            .frame(width: 280, height: 44)
-            .background(Theme.inputBg(colorScheme))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Theme.border(colorScheme), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
     private var socialAuthSection: some View {
         VStack(spacing: 10) {
-            authButton(icon: "apple.logo", label: "Continue with Apple", action: triggerAppleSignIn)
-            authButton(icon: "g.circle.fill", label: "Continue with Google", action: handleGoogleSignIn)
+            // Apple — native ASAuthorizationAppleIDButton (required by Apple HIG)
+            SignInWithAppleButton(.continue) { request in
+                request.requestedScopes = [.email, .fullName]
+            } onCompletion: { result in
+                handleAppleSignIn(result)
+            }
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(width: 280, height: 44)
+            .cornerRadius(8)
+
+            // Google — branded per Google Identity guidelines
+            Button(action: handleGoogleSignIn) {
+                HStack(spacing: 10) {
+                    // Google "G" on white circle (required by Google branding)
+                    ZStack {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: 22, height: 22)
+                        Text("G")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(Color(red: 0.26, green: 0.52, blue: 0.96)) // Google blue
+                    }
+                    Text("Continue with Google")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: 0xE3E3E3))
+                }
+                .frame(width: 280, height: 44)
+                .background(Color(hex: 0x131314))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(hex: 0x8E918F), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
 
             if isLoading {
                 ProgressView()
@@ -329,23 +367,6 @@ struct AccountView: View {
     }
 
     // MARK: - Apple Sign-In
-
-    private func triggerAppleSignIn() {
-        let provider = ASAuthorizationAppleIDProvider()
-        let request = provider.createRequest()
-        request.requestedScopes = [.email, .fullName]
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        let delegate = AppleSignInDelegate { result in
-            handleAppleSignIn(result)
-        }
-        // Store delegate to keep it alive
-        _appleSignInDelegate = delegate
-        controller.delegate = delegate
-        controller.performRequests()
-    }
-
-    // Hold a strong reference so the delegate isn't deallocated
-    @State private var _appleSignInDelegate: AppleSignInDelegate?
 
     private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
         switch result {
@@ -598,13 +619,16 @@ class UpgradePromptController {
 
 class AccountViewController {
     private var window: NSWindow?
-    
-    func show(openPromoField: Bool = false, onSuccess: @escaping (String) -> Void) {
+
+    func show(openPromoField: Bool = false, showBackButton: Bool = false, onSuccess: @escaping (String) -> Void) {
         let view = AccountView(onSuccess: { jwt in
             self.window?.close()
             self.window = nil
             onSuccess(jwt)
-        }, openPromoField: openPromoField)
+        }, openPromoField: openPromoField, showBackButton: showBackButton, onBack: { [weak self] in
+            self?.window?.close()
+            self?.window = nil
+        })
         
         let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Account")
         panel.hidesOnDeactivate = false
@@ -930,20 +954,16 @@ struct PasswordResetView: View {
     }
 }
 
-// MARK: - Apple Sign-In Delegate (programmatic, no SwiftUI button)
+// MARK: - Color Hex Extension
 
-class AppleSignInDelegate: NSObject, ASAuthorizationControllerDelegate {
-    private let completion: (Result<ASAuthorization, Error>) -> Void
-
-    init(completion: @escaping (Result<ASAuthorization, Error>) -> Void) {
-        self.completion = completion
-    }
-
-    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
-        completion(.success(authorization))
-    }
-
-    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
-        completion(.failure(error))
+private extension Color {
+    init(hex: UInt, opacity: Double = 1.0) {
+        self.init(
+            .sRGB,
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255,
+            opacity: opacity
+        )
     }
 }

@@ -580,7 +580,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.showAccountCreation()
         }, onSignIn: { [weak panel] in
             panel?.orderOut(nil)
-            self.showAccountCreation()
+            self.showAccountCreation(showBackButton: true)
         }, onCheckForUpdates: { [weak self] in
             self?.updaterController.checkForUpdates(nil)
         }, onFeedback: { [weak panel, weak self] in
@@ -823,7 +823,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.showAccountCreation()
         }, onSignIn: { [weak panel] in
             panel?.orderOut(nil)
-            self.showAccountCreation()
+            self.showAccountCreation(showBackButton: true)
         }, onCheckForUpdates: { [weak self] in
             self?.updaterController.checkForUpdates(nil)
         }, onFeedback: { [weak panel, weak self] in
@@ -948,9 +948,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     
-    private func showAccountCreation(openPromoField: Bool = false) {
+    private func showAccountCreation(openPromoField: Bool = false, showBackButton: Bool = false) {
         accountViewController = AccountViewController()
-        accountViewController?.show(openPromoField: openPromoField) { [weak self] jwt in
+        accountViewController?.show(openPromoField: openPromoField, showBackButton: showBackButton) { [weak self] jwt in
             self?.handlePostLogin(jwt: jwt)
         }
     }
