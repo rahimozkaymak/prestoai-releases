@@ -61,6 +61,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Study Mode controllers
     private var studyOnboardingController: StudyOnboardingController?
 
+    // Soft sign-in nudge (shown once after 3rd free use)
+    private var signInNudgeController: SignInNudgeController?
+
     // Vision Click controller
     private let visionClickController = VisionClickController()
 
@@ -628,9 +631,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             self?.overlayManager?.signalStreamEnd()
                             stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                             self?.refreshMenuState()
+                            // Show remaining count for free users
+                            if state == "free_active" && queriesRemaining > 0 {
+                                self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
+                            }
                             if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
                                 self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                             }
+                            // Soft sign-in nudge after 3rd free use (7 remaining out of 10)
+                            self?.showSignInNudgeIfNeeded(queriesRemaining: queriesRemaining, state: state)
                             // Wire follow-up for "Explain" captures (no initial prompt)
                             self?.wireFollowUp(screenshot: screenshot, lastQuestion: "Explain this screenshot")
                         }
@@ -749,9 +758,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.overlayManager?.signalStreamEnd()
                         stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                         self?.refreshMenuState()
+                        if state == "free_active" && queriesRemaining > 0 {
+                            self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
+                        }
                         if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
                             self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                         }
+                        self?.showSignInNudgeIfNeeded(queriesRemaining: queriesRemaining, state: state)
                         self?.wireFollowUp(screenshot: screenshot, lastQuestion: prompt)
                     }
                 },
@@ -856,8 +869,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApplication.shared.terminate(nil)
     }
     
+    // MARK: - Soft Sign-In Nudge (after 3rd free use)
+
+    private func showSignInNudgeIfNeeded(queriesRemaining: Int, state: String) {
+        // Only nudge free users who aren't signed in, exactly when they hit 7 remaining (3 used)
+        guard state == "free_active",
+              queriesRemaining == 7,
+              AppStateManager.shared.accessToken == nil,
+              !UserDefaults.standard.bool(forKey: "signInNudgeDismissed") else { return }
+
+        // Small delay so the overlay response is visible first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.signInNudgeController = SignInNudgeController()
+            self?.signInNudgeController?.show(
+                onSignIn: { [weak self] in
+                    self?.signInNudgeController = nil
+                    self?.showAccountCreation()
+                },
+                onDismiss: { [weak self] in
+                    UserDefaults.standard.set(true, forKey: "signInNudgeDismissed")
+                    self?.signInNudgeController = nil
+                }
+            )
+        }
+    }
+
     // MARK: - Auth Flow
-    
+
     private func showUpgradePrompt() {
         upgradePromptController = UpgradePromptController()
         upgradePromptController?.show(

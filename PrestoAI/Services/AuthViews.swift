@@ -628,6 +628,77 @@ class CheckoutViewController {
     }
 }
 
+// MARK: - Soft Sign-In Nudge (dismissible, shown once after 3rd free use)
+
+struct SignInNudgeView: View {
+    @Environment(\.colorScheme) var colorScheme
+    var onSignIn: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "person.crop.circle.badge.plus")
+                .font(.system(size: 36))
+                .foregroundColor(Theme.text1(colorScheme))
+
+            Text("Sign in to save your progress")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(Theme.text1(colorScheme))
+
+            Text("Keep your history and get a seamless\nexperience when you upgrade later.")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.text2(colorScheme))
+                .multilineTextAlignment(.center)
+
+            // Apple Sign-In button
+            SignInWithAppleButton(.signIn) { request in
+                request.requestedScopes = [.email, .fullName]
+            } onCompletion: { _ in
+                // Delegate handling to the parent controller
+                onSignIn()
+            }
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(width: 240, height: 44)
+            .cornerRadius(8)
+
+            Button(action: onDismiss) {
+                Text("Not now")
+                    .font(.system(size: 13))
+                    .foregroundColor(Theme.text3(colorScheme))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(28)
+        .frame(width: 320, height: 280)
+        .background(Theme.bg(colorScheme))
+    }
+}
+
+class SignInNudgeController {
+    private var window: NSWindow?
+
+    func show(onSignIn: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+        let view = SignInNudgeView(
+            onSignIn: { [weak self] in
+                self?.window?.close()
+                self?.window = nil
+                onSignIn()
+            },
+            onDismiss: { [weak self] in
+                self?.window?.close()
+                self?.window = nil
+                onDismiss()
+            }
+        )
+
+        let panel = makePrestoPanel(size: NSSize(width: 320, height: 280), title: "")
+        panel.contentView = NSHostingView(rootView: view)
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        self.window = panel
+    }
+}
+
 // MARK: - Password Reset View
 
 struct PasswordResetView: View {

@@ -174,7 +174,8 @@ class OverlayManager: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NS
 
     func showUsageWarning(remaining: Int) {
         DispatchQueue.main.async { [weak self] in
-            let js = "if(document.querySelector('.usage-warn')){}else{var w=document.createElement('div');w.className='usage-warn';w.style.cssText='position:fixed;bottom:28px;left:0;right:0;text-align:center;padding:4px;font-size:11px;color:var(--loading-text);';w.textContent='\(remaining) queries remaining today';document.body.appendChild(w);}"
+            let text = "\(remaining) free remaining"
+            let js = "if(document.querySelector('.usage-warn')){}else{var w=document.createElement('div');w.className='usage-warn';w.style.cssText='position:fixed;bottom:28px;left:0;right:0;text-align:center;padding:4px;font-size:11px;color:var(--loading-text);opacity:0.7;';w.textContent='\(text)';document.body.appendChild(w);}"
             self?.webView?.evaluateJavaScript(js, completionHandler: nil)
         }
     }
