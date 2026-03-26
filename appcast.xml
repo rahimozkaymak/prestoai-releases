@@ -1,0 +1,43 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+    <channel>
+        <title>Presto AI</title>
+        <link>https://get-prestoai.com/appcast.xml</link>
+        <description>Presto AI updates</description>
+        <language>en</language>
+
+        <!--
+            HOW TO PUBLISH AN UPDATE
+            ========================
+            1. Build and archive the new version in Xcode.
+            2. Export a Developer-ID-signed .dmg (or .zip).
+            3. Sign the artifact with Sparkle's generate_appcast tool or sign_update:
+                 ./bin/sign_update PrestoAI-X.Y.dmg
+               This prints the edSignature and file length.
+            4. Fill in the <item> below with the real values and push to
+               get-prestoai.com (Cloudflare Pages).
+
+            PRIVATE KEY STORAGE
+            ===================
+            The EdDSA private key used by sign_update must NEVER be committed to
+            this repo. Store it in:
+              - macOS Keychain (Sparkle's default: generate_keys stores it there), OR
+              - A secrets manager (1Password, AWS Secrets Manager, etc.)
+            The matching public key goes in Info.plist as SUPublicEDKey.
+        -->
+
+        <item>
+            <title>Version PLACEHOLDER_VERSION</title>
+            <pubDate>PLACEHOLDER_DATE</pubDate>
+            <sparkle:minimumSystemVersion>12.4</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://get-prestoai.com/downloads/PrestoAI-PLACEHOLDER_VERSION.dmg"
+                sparkle:version="PLACEHOLDER_BUILD_NUMBER"
+                sparkle:shortVersionString="PLACEHOLDER_VERSION"
+                sparkle:edSignature="PLACEHOLDER_ED25519_SIGNATURE"
+                length="PLACEHOLDER_FILE_SIZE_BYTES"
+                type="application/octet-stream"
+            />
+        </item>
+    </channel>
+</rss>

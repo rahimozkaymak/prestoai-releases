@@ -112,6 +112,43 @@ class APIService {
         return (profile, tokens.accessToken)
     }
 
+    // MARK: - Social Auth
+
+    /// Sign in with Apple — sends the Apple identity token to backend for verification.
+    /// Backend verifies the token with Apple, creates/finds the user, and returns a JWT.
+    func appleSignIn(identityToken: String, fullName: String?, email: String?) async throws -> String {
+        print("[API] Apple Sign-In")
+        var body: [String: Any] = [
+            "identity_token": identityToken,
+            "device_id": AppStateManager.shared.deviceID,
+        ]
+        if let name = fullName, !name.isEmpty { body["full_name"] = name }
+        if let email = email { body["email"] = email }
+
+        let data = try await post(endpoint: "/api/auth/apple", body: body, authenticated: false)
+        let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
+        await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        print("[API] Apple Sign-In successful, tokens saved")
+        return tokens.accessToken
+    }
+
+    /// Sign in with Google — sends the OAuth authorization code to backend.
+    /// Backend exchanges the code for Google tokens, verifies identity, creates/finds user, returns JWT.
+    func googleSignIn(authCode: String, redirectURI: String) async throws -> String {
+        print("[API] Google Sign-In")
+        let body: [String: Any] = [
+            "auth_code": authCode,
+            "redirect_uri": redirectURI,
+            "device_id": AppStateManager.shared.deviceID,
+        ]
+
+        let data = try await post(endpoint: "/api/auth/google", body: body, authenticated: false)
+        let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
+        await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        print("[API] Google Sign-In successful, tokens saved")
+        return tokens.accessToken
+    }
+
     func redeemPromoCode(code: String, token: String) async throws -> String {
         print("[API] Redeeming code: \(code)")
         let urlStr = baseURL + "/api/promo/redeem"

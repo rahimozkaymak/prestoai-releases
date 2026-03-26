@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import Sparkle
 
 @main
 struct PrestoAIApp: App {
@@ -63,6 +64,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Vision Click controller
     private let visionClickController = VisionClickController()
 
+    // Sparkle auto-updater
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: false,  // We start it manually in applicationDidFinishLaunching
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
+
     // FIX #7: Observe state changes to keep menu updated
     private var stateObserver: NSObjectProtocol?
     
@@ -107,6 +115,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // FIX #7: Refresh menu when AppStateManager publishes changes
         // Use Combine or a simple polling approach since AppDelegate isn't a SwiftUI view
         setupStateObserver()
+
+        // Start Sparkle auto-updater (checks for updates on a schedule)
+        updaterController.startUpdater()
 
         print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, Cmd+Shift+S for Study Mode, Cmd+Shift+D for accessibility scan, ESC to dismiss")
     }
@@ -221,6 +232,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Refer 3 Friends — Get a Free Month", action: #selector(openReferral), keyEquivalent: ""))
 
         menu.addItem(NSMenuItem.separator())
+
+        // Sparkle "Check for Updates..." menu item
+        let checkForUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        checkForUpdatesItem.target = updaterController
+        menu.addItem(checkForUpdatesItem)
 
         // "Settings" title triggers macOS auto-gear; use "Preferences" to avoid it.
         menu.addItem(NSMenuItem(title: "Preferences", action: #selector(openSettings), keyEquivalent: ""))

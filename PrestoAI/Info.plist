@@ -24,5 +24,9 @@
 	</dict>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Presto AI needs screen recording permission to capture the region you select for analysis.</string>
+	<key>SUFeedURL</key>
+	<string>https://get-prestoai.com/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>osowX24o1R1hKur6LA777A1q3twnBeSMS28Le04Bu+M=</string>
 </dict>
 </plist>

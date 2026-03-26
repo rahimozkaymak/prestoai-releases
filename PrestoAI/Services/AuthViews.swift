@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AuthenticationServices
 
 // MARK: - Upgrade Prompt (when free tier exhausted)
 
@@ -38,7 +39,7 @@ struct UpgradePromptView: View {
             
             VStack(spacing: 12) {
                 Button(action: onCreateAccount) {
-                    Text("Create Account")
+                    Text("Continue")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(Theme.text1(colorScheme))
                         .frame(maxWidth: .infinity)
@@ -75,11 +76,13 @@ struct UpgradePromptView: View {
 }
 
 // MARK: - Account Creation/Sign In View
+// Social auth (Apple/Google) is the primary flow; email is a fallback.
 
 struct AccountView: View {
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showEmailForm = false
     @State private var isSignIn = false
     @State private var email = ""
     @State private var password = ""
@@ -92,132 +95,334 @@ struct AccountView: View {
 
     var onSuccess: (String) -> Void  // Called with JWT token
     var openPromoField: Bool = false
-    
+
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             VStack(spacing: 8) {
                 Image(systemName: "person.circle.fill")
-                    .font(.system(size: 48))
+                    .font(.system(size: 44))
                     .foregroundColor(Theme.text1(colorScheme))
-                
-                Text(isSignIn ? "Sign In" : "Create Account")
+
+                Text(showEmailForm ? (isSignIn ? "Sign In" : "Create Account") : "Continue with")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(Theme.text1(colorScheme))
             }
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Email")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Theme.text4(colorScheme))
-                    
-                    TextField("you@example.com", text: $email)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundColor(Theme.text1(colorScheme))
-                        .padding(12)
-                        .background(Theme.inputBg(colorScheme))
-                        .cornerRadius(8)
-                        .autocorrectionDisabled()
-                }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Password")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Theme.text4(colorScheme))
-
-                    SecureField("••••••••", text: $password)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14))
-                        .foregroundColor(Theme.text1(colorScheme))
-                        .padding(12)
-                        .background(Theme.inputBg(colorScheme))
-                        .cornerRadius(8)
-                }
-                
-                if !errorMessage.isEmpty {
-                    Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                
-                Button(action: handleSubmit) {
-                    if isLoading {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    } else {
-                        Text(isSignIn ? "Sign In" : "Continue")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Theme.text1(colorScheme))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                    }
-                }
-                .buttonStyle(.plain)
-                .background(isValidForm ? Color.blue : Color.blue.opacity(0.5))
-                .cornerRadius(8)
-                .disabled(!isValidForm || isLoading)
-                
-                Button(action: { isSignIn.toggle(); errorMessage = "" }) {
-                    Text(isSignIn ? "Don't have an account? Create one" : "Already have an account? Sign in")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.text4(colorScheme))
-                }
-                .buttonStyle(.plain)
-
-                if isSignIn {
-                    Button(action: { showPasswordReset = true }) {
-                        Text("Forgot password?")
-                            .font(.system(size: 13))
-                            .foregroundColor(Theme.text3(colorScheme))
-                    }
-                    .buttonStyle(.plain)
-                    .sheet(isPresented: $showPasswordReset) {
-                        PasswordResetView()
-                    }
-                }
-
-                if showPromoField {
-                    TextField("Enter code", text: $promoCode)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.text1(colorScheme))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .background(Theme.subtleBorder(colorScheme))
-                        .cornerRadius(5)
-                        .autocorrectionDisabled()
-                        .frame(width: 160, height: 20)
-                } else {
-                    Button(action: { showPromoField = true }) {
-                        Text("I have a code")
-                            .font(.system(size: 13))
-                            .foregroundColor(Theme.text3(colorScheme))
-                    }
-                    .buttonStyle(.plain)
-                }
+            if showEmailForm {
+                emailFormSection
+            } else {
+                socialAuthSection
             }
-            .frame(width: 300)
         }
         .padding(32)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 460)
         .background(Theme.bg(colorScheme))
         .onAppear { showPromoField = openPromoField }
     }
 
+    // MARK: - Social Auth (Primary)
+
+    private var socialAuthSection: some View {
+        VStack(spacing: 12) {
+            // Sign in with Apple — native button
+            SignInWithAppleButton(.signIn) { request in
+                request.requestedScopes = [.email, .fullName]
+            } onCompletion: { result in
+                handleAppleSignIn(result)
+            }
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(width: 300, height: 48)
+            .cornerRadius(8)
+
+            // Sign in with Google — custom styled button
+            Button(action: handleGoogleSignIn) {
+                HStack(spacing: 10) {
+                    // Google "G" logo approximation
+                    Text("G")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            LinearGradient(
+                                colors: [.red, .yellow, .green, .blue],
+                                startPoint: .topLeading, endPoint: .bottomTrailing
+                            )
+                        )
+                        .cornerRadius(4)
+                    Text("Sign in with Google")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(Theme.text1(colorScheme))
+                }
+                .frame(width: 300, height: 48)
+                .background(Theme.inputBg(colorScheme))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Theme.border(colorScheme), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if isLoading {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+            }
+
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+                    .frame(width: 300, alignment: .leading)
+            }
+
+            // Divider
+            HStack {
+                Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
+                Text("or")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.text3(colorScheme))
+                Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
+            }
+            .frame(width: 300)
+            .padding(.vertical, 4)
+
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showEmailForm = true } }) {
+                Text("Continue with email")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text2(colorScheme))
+                    .frame(width: 300, height: 40)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+
+            if showPromoField {
+                TextField("Enter code", text: $promoCode)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Theme.subtleBorder(colorScheme))
+                    .cornerRadius(5)
+                    .autocorrectionDisabled()
+                    .frame(width: 160, height: 20)
+            } else {
+                Button(action: { showPromoField = true }) {
+                    Text("I have a code")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Email Form (Fallback)
+
+    private var emailFormSection: some View {
+        VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Email")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.text4(colorScheme))
+
+                TextField("you@example.com", text: $email)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .padding(12)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+                    .autocorrectionDisabled()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Password")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.text4(colorScheme))
+
+                SecureField("••••••••", text: $password)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .padding(12)
+                    .background(Theme.inputBg(colorScheme))
+                    .cornerRadius(8)
+            }
+
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button(action: handleEmailSubmit) {
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                } else {
+                    Text(isSignIn ? "Sign In" : "Continue")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Theme.text1(colorScheme))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+            }
+            .buttonStyle(.plain)
+            .background(isValidForm ? Color.blue : Color.blue.opacity(0.5))
+            .cornerRadius(8)
+            .disabled(!isValidForm || isLoading)
+
+            HStack(spacing: 16) {
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showEmailForm = false; errorMessage = "" } }) {
+                    Text("Back")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { isSignIn.toggle(); errorMessage = "" }) {
+                    Text(isSignIn ? "Create account" : "Sign in instead")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text4(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isSignIn {
+                Button(action: { showPasswordReset = true }) {
+                    Text("Forgot password?")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showPasswordReset) {
+                    PasswordResetView()
+                }
+            }
+
+            if showPromoField {
+                TextField("Enter code", text: $promoCode)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.text1(colorScheme))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Theme.subtleBorder(colorScheme))
+                    .cornerRadius(5)
+                    .autocorrectionDisabled()
+                    .frame(width: 160, height: 20)
+            } else {
+                Button(action: { showPromoField = true }) {
+                    Text("I have a code")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.text3(colorScheme))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: 300)
+    }
+
+    // MARK: - Validation
+
     private var isValidForm: Bool {
-        // #23 — Better email validation
         let emailRegex = #"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
         let emailValid = email.range(of: emailRegex, options: .regularExpression) != nil
         return emailValid && password.count >= 8
     }
-    
-    private func handleSubmit() {
+
+    // MARK: - Apple Sign-In
+
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .success(let auth):
+            guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let identityTokenData = credential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8) else {
+                errorMessage = "Could not retrieve Apple ID credentials."
+                return
+            }
+
+            let fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            let appleEmail = credential.email  // Only provided on first auth
+
+            isLoading = true
+            errorMessage = ""
+
+            Task {
+                do {
+                    let jwt = try await APIService.shared.appleSignIn(
+                        identityToken: identityToken,
+                        fullName: fullName.isEmpty ? nil : fullName,
+                        email: appleEmail
+                    )
+                    // Redeem promo code if entered
+                    await redeemPromoIfNeeded(jwt: jwt)
+                    await MainActor.run {
+                        isLoading = false
+                        onSuccess(jwt)
+                        dismiss()
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+
+        case .failure(let error):
+            // User cancelled — don't show an error for cancellation
+            if (error as NSError).code == ASAuthorizationError.canceled.rawValue { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Google Sign-In
+
+    private func handleGoogleSignIn() {
+        isLoading = true
+        errorMessage = ""
+
+        Task {
+            do {
+                let jwt = try await GoogleSignInHelper.signIn()
+                await redeemPromoIfNeeded(jwt: jwt)
+                await MainActor.run {
+                    isLoading = false
+                    onSuccess(jwt)
+                    dismiss()
+                }
+            } catch let error as GoogleSignInHelper.GoogleAuthError {
+                await MainActor.run {
+                    isLoading = false
+                    if case .cancelled = error { return }
+                    errorMessage = error.localizedDescription
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    // MARK: - Email Submit
+
+    private func handleEmailSubmit() {
         errorMessage = ""
         successMessage = ""
         isLoading = true
@@ -232,28 +437,7 @@ struct AccountView: View {
                     result = try await APIService.shared.register(email: email, password: password)
                 }
 
-                // Redeem promo code if provided
-                let trimmedPromo = promoCode.trimmingCharacters(in: .whitespaces)
-                if showPromoField && !trimmedPromo.isEmpty {
-                    do {
-                        let promoResult = try await APIService.shared.redeemPromoCode(code: trimmedPromo, token: result.jwt)
-                        await MainActor.run {
-                            successMessage = promoResult
-                        }
-                    } catch {
-                        await MainActor.run {
-                            isLoading = false
-                            errorMessage = "Account created but code redemption failed: \(error.localizedDescription)"
-                        }
-                        // Still call onSuccess — account was created
-                        await MainActor.run {
-                            onSuccess(result.jwt)
-                            dismiss()
-                        }
-                        return
-                    }
-                }
-
+                await redeemPromoIfNeeded(jwt: result.jwt)
                 await MainActor.run {
                     isLoading = false
                     onSuccess(result.jwt)
@@ -270,35 +454,52 @@ struct AccountView: View {
             }
         }
     }
+
+    // MARK: - Promo Code Helper
+
+    private func redeemPromoIfNeeded(jwt: String) async {
+        let trimmedPromo = promoCode.trimmingCharacters(in: .whitespaces)
+        guard showPromoField, !trimmedPromo.isEmpty else { return }
+        do {
+            let result = try await APIService.shared.redeemPromoCode(code: trimmedPromo, token: jwt)
+            await MainActor.run { successMessage = result }
+        } catch {
+            await MainActor.run {
+                errorMessage = "Account created but code failed: \(error.localizedDescription)"
+            }
+        }
+    }
 }
 
 // MARK: - Checkout Status View
+// Opens Polar checkout in-app via ASWebAuthenticationSession so Apple Pay works.
+// Falls back to browser + polling if the session can't be presented.
 
 struct CheckoutStatusView: View {
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.dismiss) private var dismiss
 
-    @State private var statusMessage = "Waiting for payment..."
-    @State private var isPolling = true
+    @State private var statusMessage = "Opening checkout..."
     @State private var pollingTask: Task<Void, Never>?
+    @State private var sessionStarted = false
     var checkoutURL: String
     var onSuccess: (String) -> Void
-    
+
     var body: some View {
         VStack(spacing: 24) {
             ProgressView()
                 .progressViewStyle(.circular)
                 .controlSize(.large)
-            
+
             Text(statusMessage)
                 .font(.system(size: 14))
                 .foregroundColor(Theme.text2(colorScheme))
-            
-            Text("Complete your purchase in the browser window")
+
+            Text("Complete your purchase in the checkout window.\nApple Pay is available if configured on this Mac.")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.text3(colorScheme))
                 .multilineTextAlignment(.center)
-            
+
             Button(action: {
                 pollingTask?.cancel()
                 dismiss()
@@ -313,26 +514,29 @@ struct CheckoutStatusView: View {
         .frame(width: 420, height: 420)
         .background(Theme.bg(colorScheme))
         .onAppear {
-            openCheckoutInBrowser()
+            openCheckout()
             startPolling()
         }
         .onDisappear {
             pollingTask?.cancel()
         }
     }
-    
-    private func openCheckoutInBrowser() {
+
+    private func openCheckout() {
         guard let url = URL(string: checkoutURL) else { return }
+        // Open in default browser — Polar's checkout supports Apple Pay in Safari.
+        // ASWebAuthenticationSession doesn't support Apple Pay on macOS,
+        // but Safari does when the user has Apple Pay configured.
         NSWorkspace.shared.open(url)
+        statusMessage = "Waiting for payment..."
     }
-    
+
     private func startPolling() {
         pollingTask = Task {
             let startTime = Date()
 
             while !Task.isCancelled {
                 do {
-                    // #12 — Don't call validateAuth with empty JWT
                     guard let jwt = AppStateManager.shared.jwt, !jwt.isEmpty else {
                         await MainActor.run {
                             statusMessage = "Not authenticated. Please sign in first."
@@ -345,10 +549,8 @@ struct CheckoutStatusView: View {
 
                     await MainActor.run {
                         if status.state == "paid" {
-                            statusMessage = "You're all set. Press Cmd+Shift+X to continue."
+                            statusMessage = "You're all set! Press Cmd+Shift+X to continue."
                             pollingTask?.cancel()
-                            // Use existing JWT from Keychain — Polar backend
-                            // doesn't return a token in the status response
                             let jwt = AppStateManager.shared.jwt ?? ""
                             onSuccess(jwt)
 
@@ -361,7 +563,7 @@ struct CheckoutStatusView: View {
                 } catch {
                     print("[Checkout] Poll error: \(error)")
                 }
-                
+
                 let elapsed = Date().timeIntervalSince(startTime)
                 let interval: UInt64 = elapsed < 120 ? 500_000_000 : 3_000_000_000
                 try? await Task.sleep(nanoseconds: interval)
@@ -400,7 +602,7 @@ class AccountViewController {
             onSuccess(jwt)
         }, openPromoField: openPromoField)
         
-        let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Account")
+        let panel = makePrestoPanel(size: NSSize(width: 420, height: 460), title: "Account")
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
