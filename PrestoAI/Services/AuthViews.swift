@@ -2,6 +2,14 @@ import SwiftUI
 import AppKit
 import AuthenticationServices
 
+// MARK: - Design Constants
+
+private let kCornerRadius: CGFloat = 10
+private let kPrimaryButtonHeight: CGFloat = 48
+private let kSecondaryButtonHeight: CGFloat = 40
+private let kContentWidth: CGFloat = 280
+private let kPanelSize = NSSize(width: 420, height: 420)
+
 // MARK: - Upgrade Prompt (when free tier exhausted)
 
 struct UpgradePromptView: View {
@@ -9,74 +17,71 @@ struct UpgradePromptView: View {
     var onCreateAccount: () -> Void
     var onPromoCode: () -> Void
     var onDismiss: () -> Void
-    
-    // Presto.AI logo (same as menu bar icon 2x)
-    private let prestoLogoB64 = "iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAADDElEQVR4nO2YX2jNYRjHP+dsNmwYMskWJeVqKVwQtyhXytxgI5IkIbVLS0vLny32J4mZsWb+XOxSKBnzJ4lbJSklWW6UC6bj4v2+/R6vsz+/82+Up06/8z7v732ez/u8f57nHPgvhZWEPmP1/zVSpGeSHIMlZNSKb9cAKwIAG7WSwE7exDtvAbqJoBOmrxEYBm4CM6ULJxZL/IwWA8sNSAJYIJAfQEpOFwWgKeClnk+AisBubJhSoBhoAPpxsytVXwlQCfQCA8B8YKrGtgqiR+29at/X+KyiBHAH+BzovNE1wHqjPyPnXWr7PdQt/bJg/ITEL8kGoBn4JmNXgFpgCb+fHP88q/cuBTB1wAgwBEwj5qnzJ+QI8EEOUsBPPb8C7bjlSeKWFKBN/ZcDmG3SvwLmBROILVOA1cBHGd0KlBmjfgO3q/+W2n4vbZf+BTBXuoz3j717rgJvTV+RgTkvpyPAe2CV9PXSPwfmmHFZSbGM1AOnBFhiDHfKaSuwDncFDAPH8gFjpVyG7TL5yHSa92qALwZmdi4h0olfwgty2qF2qZ6bge/AoIGpxKWWdOknKxAfmYuCaQtgdkj/DHcjJ3GHohZ3IfrLNOt8ZmfWJafnAhh/mp4SpQcvHbio5SQ6FqabaANbmDrpHwOzpKsAVgKHgU/q7wU2AdWZwlmYHhltCWB2GhibzeuBd/x5qaaAPtz+Gq+wSwuTAK7J0OkAZpf0j4giY4/2dGAt8EbvNQALJwpgJWk+vTJ2MoDZLf0Q6escO/smXLqxfbFgfHT65LRZfT4d7CGKzFhFl7/NN+JKlwTu1GUE0y+nJwIYX9fYDTzeBi0DqvR9wtGxpaeHaQpg9kk/GAMmI/HrXYzL1ingeACzX/qHwIyYMLFPk79BB+S0MYA5IP0DXE6LAxNbfIF1YxSYg0S1cJkZkzcYgKVyej2AOVRIGIiWqxx4jaubt6jvqGDu4S64vMN48U6qcRWhzzkp4G6hYUKoKlzpkAJu434dFBwmhErifn16mdR/LkbLRZMqOS0z/1n5BUqXpG40It4WAAAAAElFTkSuQmCC"
-    
+
     var body: some View {
-        VStack(spacing: 20) {
-            // Presto.AI Logo
-            if let data = Data(base64Encoded: prestoLogoB64),
-               let nsImage = NSImage(data: data) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .renderingMode(.template)
-                    .foregroundColor(Theme.text1(colorScheme))
-                    .frame(width: 48, height: 48)
-            } else {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 48))
-                    .foregroundColor(Theme.text1(colorScheme))
-            }
-            
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 48, height: 48)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            Spacer().frame(height: 16)
+
             Text("You've used all your free analyses")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundColor(Theme.text1(colorScheme))
-            
+
+            Spacer().frame(height: 8)
+
             Text("Unlock unlimited for \(AppStateManager.shared.cachedPrice)")
                 .font(.system(size: 14))
                 .foregroundColor(Theme.text2(colorScheme))
-            
-            VStack(spacing: 12) {
+
+            Spacer().frame(height: 24)
+
+            VStack(spacing: 10) {
                 Button(action: onCreateAccount) {
                     Text("Continue")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Theme.text1(colorScheme))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: kContentWidth, height: kPrimaryButtonHeight)
                         .background(Color.blue)
-                        .cornerRadius(8)
+                        .cornerRadius(kCornerRadius)
                 }
                 .buttonStyle(.plain)
-                
+
                 Button(action: onPromoCode) {
                     Text("I have a code")
                         .font(.system(size: 14))
                         .foregroundColor(Theme.text2(colorScheme))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .frame(width: kContentWidth, height: kSecondaryButtonHeight)
                         .background(Theme.inputBg(colorScheme))
-                        .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                
-                Button(action: onDismiss) {
-                    Text("Not now")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.text3(colorScheme))
+                        .cornerRadius(kCornerRadius)
                 }
                 .buttonStyle(.plain)
             }
-            .frame(width: 280)
+
+            Spacer().frame(height: 16)
+
+            Button(action: onDismiss) {
+                Text("Not now")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.text4(colorScheme))
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
         }
-        .padding(32)
-        .frame(width: 420, height: 420)
+        .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
     }
 }
 
 // MARK: - Account Creation/Sign In View
-// Social auth (Apple/Google) is the primary flow; email is a fallback.
 
 struct AccountView: View {
     @Environment(\.colorScheme) var colorScheme
@@ -93,7 +98,7 @@ struct AccountView: View {
     @State private var isLoading = false
     @State private var showPasswordReset = false
 
-    var onSuccess: (String) -> Void  // Called with JWT token
+    var onSuccess: (String) -> Void
     var openPromoField: Bool = false
     var showBackButton: Bool = false
     var onBack: (() -> Void)? = nil
@@ -106,21 +111,22 @@ struct AccountView: View {
                     Button(action: { onBack?() }) {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.system(size: 13, weight: .medium))
                             Text("Back")
-                                .font(.system(size: 13))
+                                .font(.system(size: 15))
                         }
-                        .foregroundColor(Theme.text3(colorScheme))
+                        .foregroundColor(.blue)
                     }
                     .buttonStyle(.plain)
                     Spacer()
                 }
-                .padding(.top, 12)
-                .padding(.horizontal, 4)
+                .padding(.top, 16)
+                .padding(.horizontal, 8)
             }
 
             Spacer()
 
+            // Header
             VStack(spacing: 8) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
@@ -134,6 +140,8 @@ struct AccountView: View {
                     .foregroundColor(Theme.text1(colorScheme))
             }
 
+            Spacer().frame(height: 24)
+
             if showEmailForm {
                 emailFormSection
             } else {
@@ -143,7 +151,7 @@ struct AccountView: View {
             Spacer()
         }
         .padding(.horizontal, 32)
-        .frame(width: 420, height: 420)
+        .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
         .onAppear { showPromoField = openPromoField }
     }
@@ -151,38 +159,37 @@ struct AccountView: View {
     // MARK: - Social Auth (Primary)
 
     private var socialAuthSection: some View {
-        VStack(spacing: 10) {
-            // Apple — native ASAuthorizationAppleIDButton (required by Apple HIG)
+        VStack(spacing: 16) {
+            // Apple — native button (required by Apple HIG)
             SignInWithAppleButton(.continue) { request in
                 request.requestedScopes = [.email, .fullName]
             } onCompletion: { result in
                 handleAppleSignIn(result)
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(width: 280, height: 44)
-            .cornerRadius(8)
+            .frame(width: kContentWidth, height: kPrimaryButtonHeight)
+            .cornerRadius(kCornerRadius)
 
             // Google — branded per Google Identity guidelines
             Button(action: handleGoogleSignIn) {
                 HStack(spacing: 10) {
-                    // Google "G" on white circle (required by Google branding)
                     ZStack {
                         Circle()
                             .fill(.white)
-                            .frame(width: 22, height: 22)
+                            .frame(width: 20, height: 20)
                         Text("G")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(Color(red: 0.26, green: 0.52, blue: 0.96)) // Google blue
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(Color(red: 0.26, green: 0.52, blue: 0.96))
                     }
                     Text("Continue with Google")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Color(hex: 0xE3E3E3))
                 }
-                .frame(width: 280, height: 44)
+                .frame(width: kContentWidth, height: kPrimaryButtonHeight)
                 .background(Color(hex: 0x131314))
-                .cornerRadius(8)
+                .cornerRadius(kCornerRadius)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: kCornerRadius)
                         .stroke(Color(hex: 0x8E918F), lineWidth: 1)
                 )
             }
@@ -192,34 +199,33 @@ struct AccountView: View {
                 ProgressView()
                     .progressViewStyle(.circular)
                     .controlSize(.small)
-                    .padding(.top, 4)
             }
 
             if !errorMessage.isEmpty {
                 Text(errorMessage)
                     .font(.system(size: 12))
                     .foregroundColor(.red)
-                    .frame(width: 300, alignment: .leading)
+                    .frame(width: kContentWidth, alignment: .leading)
             }
 
             // Divider
-            HStack {
-                Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
+            HStack(spacing: 12) {
+                Rectangle().fill(Color.white.opacity(0.3)).frame(height: 1)
                 Text("or")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.text4(colorScheme))
-                Rectangle().fill(Theme.border(colorScheme)).frame(height: 1)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.text3(colorScheme))
+                Rectangle().fill(Color.white.opacity(0.3)).frame(height: 1)
             }
-            .frame(width: 280)
-            .padding(.vertical, 2)
+            .frame(width: kContentWidth)
 
+            // Email fallback
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showEmailForm = true } }) {
                 Text("Continue with email")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(Theme.text1(colorScheme))
-                    .frame(width: 280, height: 44)
+                    .frame(width: kContentWidth, height: kPrimaryButtonHeight)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
             }
             .buttonStyle(.plain)
         }
@@ -240,7 +246,7 @@ struct AccountView: View {
                     .foregroundColor(Theme.text1(colorScheme))
                     .padding(12)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
                     .autocorrectionDisabled()
             }
 
@@ -255,7 +261,7 @@ struct AccountView: View {
                     .foregroundColor(Theme.text1(colorScheme))
                     .padding(12)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
             }
 
             if !errorMessage.isEmpty {
@@ -271,18 +277,18 @@ struct AccountView: View {
                         .progressViewStyle(.circular)
                         .controlSize(.small)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .frame(height: kPrimaryButtonHeight)
                 } else {
                     Text(isSignIn ? "Sign In" : "Continue")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Theme.text1(colorScheme))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                        .frame(height: kPrimaryButtonHeight)
                 }
             }
             .buttonStyle(.plain)
             .background(isValidForm ? Color.blue : Color.blue.opacity(0.5))
-            .cornerRadius(8)
+            .cornerRadius(kCornerRadius)
             .disabled(!isValidForm || isLoading)
 
             HStack(spacing: 16) {
@@ -304,8 +310,8 @@ struct AccountView: View {
             if isSignIn {
                 Button(action: { showPasswordReset = true }) {
                     Text("Forgot password?")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.text3(colorScheme))
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showPasswordReset) {
@@ -322,19 +328,19 @@ struct AccountView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
                     .background(Theme.subtleBorder(colorScheme))
-                    .cornerRadius(5)
+                    .cornerRadius(6)
                     .autocorrectionDisabled()
-                    .frame(width: 160, height: 20)
+                    .frame(width: 160, height: 24)
             } else {
                 Button(action: { showPromoField = true }) {
                     Text("I have a code")
-                        .font(.system(size: 13))
-                        .foregroundColor(Theme.text3(colorScheme))
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.text4(colorScheme))
                 }
                 .buttonStyle(.plain)
             }
         }
-        .frame(width: 300)
+        .frame(width: kContentWidth + 20)
     }
 
     // MARK: - Validation
@@ -360,7 +366,7 @@ struct AccountView: View {
             let fullName = [credential.fullName?.givenName, credential.fullName?.familyName]
                 .compactMap { $0 }
                 .joined(separator: " ")
-            let appleEmail = credential.email  // Only provided on first auth
+            let appleEmail = credential.email
 
             isLoading = true
             errorMessage = ""
@@ -372,7 +378,6 @@ struct AccountView: View {
                         fullName: fullName.isEmpty ? nil : fullName,
                         email: appleEmail
                     )
-                    // Redeem promo code if entered
                     await redeemPromoIfNeeded(jwt: jwt)
                     await MainActor.run {
                         isLoading = false
@@ -388,7 +393,6 @@ struct AccountView: View {
             }
 
         case .failure(let error):
-            // User cancelled — don't show an error for cancellation
             if (error as NSError).code == ASAuthorizationError.canceled.rawValue { return }
             errorMessage = error.localizedDescription
         }
@@ -476,8 +480,6 @@ struct AccountView: View {
 }
 
 // MARK: - Checkout Status View
-// Opens Polar checkout in-app via ASWebAuthenticationSession so Apple Pay works.
-// Falls back to browser + polling if the session can't be presented.
 
 struct CheckoutStatusView: View {
     @Environment(\.colorScheme) var colorScheme
@@ -485,24 +487,31 @@ struct CheckoutStatusView: View {
 
     @State private var statusMessage = "Opening checkout..."
     @State private var pollingTask: Task<Void, Never>?
-    @State private var sessionStarted = false
     var checkoutURL: String
     var onSuccess: (String) -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
+            Spacer()
+
             ProgressView()
                 .progressViewStyle(.circular)
                 .controlSize(.large)
 
+            Spacer().frame(height: 20)
+
             Text(statusMessage)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
                 .foregroundColor(Theme.text2(colorScheme))
 
+            Spacer().frame(height: 8)
+
             Text("Complete your purchase in the checkout window.\nApple Pay is available if configured on this Mac.")
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundColor(Theme.text3(colorScheme))
                 .multilineTextAlignment(.center)
+
+            Spacer().frame(height: 24)
 
             Button(action: {
                 pollingTask?.cancel()
@@ -513,9 +522,10 @@ struct CheckoutStatusView: View {
                     .foregroundColor(Theme.text4(colorScheme))
             }
             .buttonStyle(.plain)
+
+            Spacer()
         }
-        .padding(40)
-        .frame(width: 420, height: 420)
+        .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
         .onAppear {
             openCheckout()
@@ -528,9 +538,6 @@ struct CheckoutStatusView: View {
 
     private func openCheckout() {
         guard let url = URL(string: checkoutURL) else { return }
-        // Open in default browser — Polar's checkout supports Apple Pay in Safari.
-        // ASWebAuthenticationSession doesn't support Apple Pay on macOS,
-        // but Safari does when the user has Apple Pay configured.
         NSWorkspace.shared.open(url)
         statusMessage = "Waiting for payment..."
     }
@@ -576,19 +583,20 @@ struct CheckoutStatusView: View {
     }
 }
 
-// MARK: - Window Controllers (using shared makePrestoPanel)
+// MARK: - Window Controllers
 
 class UpgradePromptController {
     private var window: NSWindow?
-    
+
     func show(onCreateAccount: @escaping () -> Void, onPromoCode: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         let view = UpgradePromptView(onCreateAccount: onCreateAccount, onPromoCode: onPromoCode, onDismiss: {
             self.window?.close()
             self.window = nil
             onDismiss()
         })
-        
-        let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Upgrade to Pro")
+
+        let panel = makePrestoPanel(size: kPanelSize, title: "")
+        panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -598,7 +606,6 @@ class UpgradePromptController {
 
 class AccountViewController {
     private var window: NSWindow?
-
     var onBack: (() -> Void)?
 
     func show(openPromoField: Bool = false, showBackButton: Bool = false, onSuccess: @escaping (String) -> Void) {
@@ -611,8 +618,8 @@ class AccountViewController {
             self?.window = nil
             self?.onBack?()
         })
-        
-        let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Account")
+
+        let panel = makePrestoPanel(size: kPanelSize, title: "")
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
@@ -631,7 +638,7 @@ class CheckoutViewController {
             onSuccess(jwt)
         })
 
-        let panel = makePrestoPanel(size: NSSize(width: 420, height: 420), title: "Checkout")
+        let panel = makePrestoPanel(size: kPanelSize, title: "")
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -639,7 +646,7 @@ class CheckoutViewController {
     }
 }
 
-// MARK: - Soft Sign-In Nudge (dismissible, shown once after 3rd free use)
+// MARK: - Soft Sign-In Nudge
 
 struct SignInNudgeView: View {
     @Environment(\.colorScheme) var colorScheme
@@ -647,40 +654,51 @@ struct SignInNudgeView: View {
     var onDismiss: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "person.crop.circle.badge.plus")
-                .font(.system(size: 36))
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image(systemName: "person.badge.plus")
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.text1(colorScheme))
+
+            Spacer().frame(height: 16)
 
             Text("Sign in to save your progress")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(Theme.text1(colorScheme))
 
-            Text("Keep your history and get a seamless\nexperience when you upgrade later.")
+            Spacer().frame(height: 8)
+
+            Text("Keep your history and get a seamless experience when you upgrade later.")
                 .font(.system(size: 13))
                 .foregroundColor(Theme.text2(colorScheme))
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
 
-            // Apple Sign-In button
+            Spacer().frame(height: 20)
+
             SignInWithAppleButton(.signIn) { request in
                 request.requestedScopes = [.email, .fullName]
             } onCompletion: { _ in
-                // Delegate handling to the parent controller
                 onSignIn()
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(width: 240, height: 44)
-            .cornerRadius(8)
+            .cornerRadius(kCornerRadius)
+
+            Spacer().frame(height: 12)
 
             Button(action: onDismiss) {
                 Text("Not now")
-                    .font(.system(size: 13))
-                    .foregroundColor(Theme.text3(colorScheme))
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.text4(colorScheme))
             }
             .buttonStyle(.plain)
+
+            Spacer()
         }
-        .padding(28)
-        .frame(width: 320, height: 280)
+        .padding(24)
+        .frame(width: 320, height: 300)
         .background(Theme.bg(colorScheme))
     }
 }
@@ -702,7 +720,7 @@ class SignInNudgeController {
             }
         )
 
-        let panel = makePrestoPanel(size: NSSize(width: 320, height: 280), title: "")
+        let panel = makePrestoPanel(size: NSSize(width: 320, height: 300), title: "")
         panel.contentView = NSHostingView(rootView: view)
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -730,25 +748,25 @@ struct PasswordResetView: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
+            Spacer()
+
             switch step {
-            case .enterEmail:
-                emailStep
-            case .enterCode:
-                codeStep
-            case .success:
-                successStep
+            case .enterEmail: emailStep
+            case .enterCode: codeStep
+            case .success: successStep
             }
+
+            Spacer()
         }
-        .padding(32)
-        .frame(width: 420, height: 420)
+        .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
     }
 
     private var emailStep: some View {
         VStack(spacing: 20) {
             Image(systemName: "key.fill")
-                .font(.system(size: 40))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.text2(colorScheme))
 
             Text("Reset Password")
@@ -767,7 +785,7 @@ struct PasswordResetView: View {
                     .foregroundColor(Theme.text1(colorScheme))
                     .padding(12)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
                     .autocorrectionDisabled()
 
                 if !errorMessage.isEmpty {
@@ -779,17 +797,17 @@ struct PasswordResetView: View {
                 Button(action: requestReset) {
                     if isLoading {
                         ProgressView().progressViewStyle(.circular).controlSize(.small)
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .frame(maxWidth: .infinity).frame(height: kPrimaryButtonHeight)
                     } else {
                         Text("Send Reset Code")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Theme.text1(colorScheme))
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity).frame(height: kPrimaryButtonHeight)
                     }
                 }
                 .buttonStyle(.plain)
                 .background(Color.blue)
-                .cornerRadius(8)
+                .cornerRadius(kCornerRadius)
                 .disabled(email.isEmpty || isLoading)
 
                 Button(action: { dismiss() }) {
@@ -799,14 +817,14 @@ struct PasswordResetView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .frame(width: 300)
+            .frame(width: kContentWidth)
         }
     }
 
     private var codeStep: some View {
         VStack(spacing: 20) {
             Image(systemName: "envelope.badge.fill")
-                .font(.system(size: 40))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.text2(colorScheme))
 
             Text("Check Your Email")
@@ -826,7 +844,7 @@ struct PasswordResetView: View {
                     .multilineTextAlignment(.center)
                     .padding(12)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
                     .frame(width: 180)
 
                 SecureField("New password", text: $newPassword)
@@ -835,7 +853,7 @@ struct PasswordResetView: View {
                     .foregroundColor(Theme.text1(colorScheme))
                     .padding(12)
                     .background(Theme.inputBg(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(kCornerRadius)
 
                 if !errorMessage.isEmpty {
                     Text(errorMessage)
@@ -846,17 +864,17 @@ struct PasswordResetView: View {
                 Button(action: submitReset) {
                     if isLoading {
                         ProgressView().progressViewStyle(.circular).controlSize(.small)
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .frame(maxWidth: .infinity).frame(height: kPrimaryButtonHeight)
                     } else {
                         Text("Reset Password")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Theme.text1(colorScheme))
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity).frame(height: kPrimaryButtonHeight)
                     }
                 }
                 .buttonStyle(.plain)
                 .background(Color.blue)
-                .cornerRadius(8)
+                .cornerRadius(kCornerRadius)
                 .disabled(code.count < 6 || newPassword.count < 8 || isLoading)
 
                 Button(action: { step = .enterEmail; errorMessage = "" }) {
@@ -866,14 +884,14 @@ struct PasswordResetView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .frame(width: 300)
+            .frame(width: kContentWidth)
         }
     }
 
     private var successStep: some View {
         VStack(spacing: 20) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(.green)
 
             Text("Password Reset!")
@@ -886,14 +904,14 @@ struct PasswordResetView: View {
 
             Button(action: { dismiss() }) {
                 Text("Done")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Theme.text1(colorScheme))
-                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity).frame(height: kPrimaryButtonHeight)
             }
             .buttonStyle(.plain)
             .background(Color.blue)
-            .cornerRadius(8)
-            .frame(width: 300)
+            .cornerRadius(kCornerRadius)
+            .frame(width: kContentWidth)
         }
     }
 

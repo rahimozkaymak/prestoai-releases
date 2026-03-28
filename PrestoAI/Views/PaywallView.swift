@@ -27,17 +27,16 @@ struct PaywallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Title
             Text("Unlock Your Full Potential")
-                .font(.system(size: 26, weight: .bold))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundColor(Theme.text1(colorScheme))
-                .padding(.top, 16)
+                .padding(.top, 24)
                 .padding(.bottom, 6)
 
             Text("Choose how to continue your experience")
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundColor(Theme.text2(colorScheme))
-                .padding(.bottom, 20)
+                .padding(.bottom, 24)
 
             if info.canUseReferral {
                 dualLayout
@@ -56,7 +55,7 @@ struct PaywallView: View {
     // MARK: - Dual Layout (Subscribe + Referral)
 
     private var dualLayout: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 24) {
             subscribeCard
             referralCard
         }
@@ -68,16 +67,16 @@ struct PaywallView: View {
 
     private var subscribeOnlyLayout: some View {
         subscribeCard
-            .frame(maxWidth: 280)
+            .frame(maxWidth: 300)
             .padding(.horizontal, 40)
     }
 
     // MARK: - Subscribe Card
 
     private var subscribeCard: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             Image(systemName: "sparkles")
-                .font(.system(size: 28))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.text1(colorScheme))
 
             Text("Unlimited Analyses")
@@ -85,31 +84,29 @@ struct PaywallView: View {
                 .foregroundColor(Theme.text1(colorScheme))
 
             Text(info.subscribePrice)
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 28, weight: .bold))
                 .foregroundColor(Theme.text1(colorScheme))
 
-            // Feature bullets
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 8) {
                 featureBullet("End-to-end depth reports")
                 featureBullet("Advanced data points")
                 featureBullet("Priority support")
             }
-            .padding(.bottom, 4)
 
             Spacer(minLength: 0)
 
             Button(action: onSubscribe) {
                 Text("Start Full Access")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Theme.text1(colorScheme))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 36)
+                    .frame(height: 48)
                     .background(Color.blue)
-                    .cornerRadius(8)
+                    .cornerRadius(10)
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
+        .padding(24)
         .frame(maxWidth: .infinity)
         .background(Theme.surface(colorScheme))
         .cornerRadius(12)
@@ -120,13 +117,13 @@ struct PaywallView: View {
     }
 
     private func featureBullet(_ text: String) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "checkmark")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Theme.text2(colorScheme))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.text1(colorScheme).opacity(0.85))
             Text(text)
-                .font(.system(size: 12))
-                .foregroundColor(Theme.text2(colorScheme))
+                .font(.system(size: 14))
+                .foregroundColor(Theme.text1(colorScheme).opacity(0.85))
         }
     }
 
@@ -135,9 +132,9 @@ struct PaywallView: View {
     private var referralCard: some View {
         let remaining = info.needed - info.qualifiedCount
 
-        return VStack(spacing: 12) {
+        return VStack(spacing: 16) {
             Image(systemName: "person.2.fill")
-                .font(.system(size: 28))
+                .font(.system(size: 24, weight: .medium))
                 .foregroundColor(Theme.text1(colorScheme))
 
             Text("Get 1 Free Month")
@@ -149,7 +146,6 @@ struct PaywallView: View {
                 .foregroundColor(Theme.text2(colorScheme))
                 .multilineTextAlignment(.center)
 
-            // Progress icons
             HStack(spacing: 8) {
                 ForEach(0..<info.needed, id: \.self) { i in
                     Image(systemName: "person.circle.fill")
@@ -158,15 +154,9 @@ struct PaywallView: View {
                 }
             }
 
-            VStack(spacing: 2) {
-                Text("\(remaining) invite\(remaining == 1 ? "" : "s") remaining")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Theme.text2(colorScheme))
-                Text("\(remaining) invite\(remaining == 1 ? "" : "s") remaining to claim reward")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.text2(colorScheme).opacity(0.7))
-            }
-            .padding(.bottom, 4)
+            Text("\(remaining) invite\(remaining == 1 ? "" : "s") remaining")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.text2(colorScheme))
 
             Spacer(minLength: 0)
 
@@ -185,17 +175,17 @@ struct PaywallView: View {
                 }
                 .foregroundColor(Theme.text1(colorScheme))
                 .frame(maxWidth: .infinity)
-                .frame(height: 36)
+                .frame(height: 48)
                 .background(Theme.inputBg(colorScheme))
-                .cornerRadius(8)
+                .cornerRadius(10)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10)
                         .stroke(Theme.subtleBorder(colorScheme), lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
+        .padding(24)
         .frame(maxWidth: .infinity)
         .background(Theme.surface(colorScheme))
         .cornerRadius(12)
@@ -241,7 +231,6 @@ class PaywallController {
                         let deviceID = AppStateManager.shared.deviceID
                         let result = try await APIService.shared.createReferralCode(deviceID: deviceID)
                         await MainActor.run {
-                            // Re-show with updated code
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString("https://prestoai.app/r/\(result.code)", forType: .string)
                         }

@@ -31,7 +31,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab picker — fixed position, always at the top
+            // Tab picker — fixed at top, never moves
             Picker("", selection: $selectedTab) {
                 ForEach(SettingsTab.allCases, id: \.self) { tab in
                     Text(tab.rawValue).tag(tab)
@@ -40,10 +40,10 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .tint(Theme.text3(colorScheme))
             .padding(.horizontal, 32)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
 
-            // Content area — fixed height so tabs don't shift
+            // Content
             Group {
                 if selectedTab == .myAccount {
                     myAccountContent
@@ -52,6 +52,13 @@ struct SettingsView: View {
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
+
+            // Version — bottom center, consistent across both tabs
+            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                .font(.system(size: 13))
+                .foregroundColor(Theme.text4(colorScheme).opacity(0.5))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 16)
         }
         .frame(width: 420, height: 420)
         .background(Theme.bg(colorScheme))
@@ -68,7 +75,7 @@ struct SettingsView: View {
     // MARK: - My Account Tab
 
     private var myAccountContent: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             // Profile header
             VStack(spacing: 6) {
                 Image(nsImage: NSApp.applicationIconImage)
@@ -88,16 +95,28 @@ struct SettingsView: View {
                     .foregroundColor(Theme.text3(colorScheme))
                     .multilineTextAlignment(.center)
             }
-            .padding(.top, 4)
+
+            Spacer().frame(height: 24)
 
             // Actions
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 if stateManager.currentState != .paid {
-                    settingsButton("Upgrade to Pro", action: { onUpgrade?() })
+                    // Primary CTA — filled blue button
+                    Button(action: { onUpgrade?() }) {
+                        Text("Upgrade to Pro")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .background(Color.blue)
+                            .cornerRadius(10)
+                    }
+                    .buttonStyle(.plain)
 
                     Text("Unlimited analyses · \(stateManager.cachedPrice)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Theme.text2(colorScheme))
+                        .padding(.bottom, 4)
                 }
 
                 if stateManager.currentState == .paid {
@@ -112,8 +131,10 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 32)
 
+            Spacer().frame(height: 20)
+
             // Footer links
-            VStack(spacing: 8) {
+            VStack(spacing: 16) {
                 Button(action: { onReferral?() }) {
                     Text("Refer a Friend — Get a Free Month")
                         .font(.system(size: 12))
@@ -136,15 +157,17 @@ struct SettingsView: View {
     // MARK: - Settings Tab
 
     private var settingsContent: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             // Default Prompt
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Default Prompt")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Theme.text4(colorScheme))
-                Text("Sent with every analysis. Edit it to match how you like your answers.")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.text4(colorScheme))
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Default Prompt")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Theme.text4(colorScheme))
+                    Text("Sent with every analysis. Edit it to match how you like your answers.")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.text4(colorScheme))
+                }
 
                 TextEditor(text: $defaultPrompt)
                     .font(.system(size: 13))
@@ -152,13 +175,17 @@ struct SettingsView: View {
                     .if_available_scrollContentBackgroundHidden()
                     .padding(10)
                     .background(Theme.subtleBorder(colorScheme))
-                    .cornerRadius(8)
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Theme.text4(colorScheme).opacity(0.15), lineWidth: 1)
+                    )
                     .frame(height: 80)
 
                 Button(action: resetDefaultPrompt) {
                     Text("Reset to Default")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.text4(colorScheme))
+                        .font(.system(size: 12))
+                        .foregroundColor(.blue)
                 }
                 .buttonStyle(.plain)
             }
@@ -185,20 +212,11 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 40)
                 .background(Theme.subtleBg(colorScheme))
-                .cornerRadius(8)
+                .cornerRadius(10)
 
                 settingsButton("Check for Updates…", action: { onCheckForUpdates?() })
                 settingsButton("Send Feedback", action: { onFeedback?() })
             }
-
-            Spacer()
-
-            // Version
-            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                .font(.system(size: 11))
-                .foregroundColor(Theme.text4(colorScheme))
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.bottom, 4)
         }
         .padding(.horizontal, 32)
     }
@@ -213,7 +231,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 40)
                 .background(Theme.subtleBg(colorScheme))
-                .cornerRadius(8)
+                .cornerRadius(10)
         }
         .buttonStyle(.plain)
     }
