@@ -3,6 +3,7 @@ import AppKit
 
 enum SettingsTab: String, CaseIterable {
     case settings = "Settings"
+    case profile = "Profile"
     case myAccount = "My Account"
 }
 
@@ -47,6 +48,9 @@ struct SettingsView: View {
             Group {
                 if selectedTab == .myAccount {
                     myAccountContent
+                } else if selectedTab == .profile {
+                    UserContextSettingsView()
+                        .padding(.horizontal, 32)
                 } else {
                     settingsContent
                 }

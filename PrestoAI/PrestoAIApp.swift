@@ -45,6 +45,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlayManager: OverlayManager?
     private var setupWindow: NSWindow?
     private var settingsPanel: NSPanel?
+    private var historyPanel: NSPanel?
     
     // Dynamic menu items (updated in place instead of rebuilding the entire menu)
     private var queriesMenuItem: NSMenuItem?
@@ -118,6 +119,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // FIX #7: Refresh menu when AppStateManager publishes changes
         // Use Combine or a simple polling approach since AppDelegate isn't a SwiftUI view
         setupStateObserver()
+
+        // Initialize history database
+        HistoryManager.shared.open()
 
         // Start Sparkle auto-updater (checks for updates on a schedule)
         updaterController.startUpdater()
@@ -231,6 +235,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quickPromptItem)
 
         menu.addItem(NSMenuItem.separator())
+
+        menu.addItem(NSMenuItem(title: "History", action: #selector(openHistory), keyEquivalent: ""))
 
         // "Settings" title triggers macOS auto-gear; use "Preferences" to avoid it.
         menu.addItem(NSMenuItem(title: "Preferences", action: #selector(openSettings), keyEquivalent: ""))
@@ -624,9 +630,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.overlayManager?.storeConversationContext(screenshot: screenshot, initialPrompt: nil)
 
                 var isFirstChunk = true
+                var responseAccumulator = ""
                 APIService.shared.sendScreenshot(screenshot,
                     onChunk: { [weak self] chunk in
                         guard let self = self else { return }
+                        responseAccumulator += chunk
                         if isFirstChunk {
                             isFirstChunk = false
                             self.overlayManager?.showResponse("")
@@ -638,16 +646,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             self?.overlayManager?.signalStreamEnd()
                             stateManager.updateAfterQuery(queriesRemaining: queriesRemaining, state: state)
                             self?.refreshMenuState()
-                            // Show remaining count for free users
                             if state == "free_active" && queriesRemaining > 0 {
                                 self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                             }
                             if state == "paid" && queriesRemaining > 0 && queriesRemaining <= 10 {
                                 self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                             }
-                            // Soft sign-in nudge after 3rd free use (7 remaining out of 10)
                             self?.showSignInNudgeIfNeeded(queriesRemaining: queriesRemaining, state: state)
-                            // Wire follow-up for "Explain" captures (no initial prompt)
+                            // Save to history
+                            let entry = HistoryEntry(
+                                mode: "capture",
+                                thumbnailData: HistoryManager.generateThumbnail(from: screenshot),
+                                firstLine: String(responseAccumulator.prefix(150)),
+                                fullResponse: responseAccumulator
+                            )
+                            HistoryManager.shared.insert(entry)
                             self?.wireFollowUp(screenshot: screenshot, lastQuestion: "Explain this screenshot")
                         }
                     },
@@ -745,6 +758,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
             var isFirstChunk = true
+            var responseAccumulator = ""
             let actualPrompt = isFollowUp
                 ? (self?.overlayManager?.buildContextPrompt(newQuestion: prompt) ?? prompt)
                 : prompt
@@ -752,6 +766,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             APIService.shared.sendScreenshot(screenshot, prompt: actualPrompt,
                 onChunk: { [weak self] chunk in
                     guard let self = self else { return }
+                    responseAccumulator += chunk
                     if isFirstChunk {
                         isFirstChunk = false
                         if !isFollowUp {
@@ -772,6 +787,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             self?.overlayManager?.showUsageWarning(remaining: queriesRemaining)
                         }
                         self?.showSignInNudgeIfNeeded(queriesRemaining: queriesRemaining, state: state)
+                        // Save to history
+                        if !isFollowUp {
+                            let entry = HistoryEntry(
+                                mode: "quick_prompt",
+                                thumbnailData: HistoryManager.generateThumbnail(from: screenshot),
+                                firstLine: String(responseAccumulator.prefix(150)),
+                                fullResponse: responseAccumulator,
+                                queryText: prompt
+                            )
+                            HistoryManager.shared.insert(entry)
+                        }
                         self?.wireFollowUp(screenshot: screenshot, lastQuestion: prompt)
                     }
                 },
@@ -814,6 +840,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.sendWithPrompt(screenshot: screenshot, prompt: followUpPrompt, isFollowUp: true)
             }
         }
+    }
+
+    @objc private func openHistory() {
+        if let existing = historyPanel, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let panel = makePrestoPanel(size: NSSize(width: 420, height: 520), title: "History")
+        panel.hidesOnDeactivate = false
+        let historyView = HistoryView(onSelectEntry: { [weak self] entry in
+            // Re-open past response in the overlay
+            self?.overlayManager?.showResponse("")
+            self?.overlayManager?.appendChunk(entry.fullResponse)
+            self?.overlayManager?.signalStreamEnd()
+        })
+        panel.contentView = NSHostingView(rootView: historyView)
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        self.historyPanel = panel
     }
 
     @objc private func openSettings() { showSettings(initialTab: .settings) }

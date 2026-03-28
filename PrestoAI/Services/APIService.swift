@@ -231,8 +231,14 @@ class APIService {
                         onChunk: @escaping (String) -> Void,
                         onComplete: @escaping (Int, String) -> Void,
                         onError: @escaping (Error) -> Void = { _ in }) {
-        let p = prompt ?? UserDefaults.standard.string(forKey: "defaultPrompt")
+        var p = prompt ?? UserDefaults.standard.string(forKey: "defaultPrompt")
             ?? "Help me solve this problem. Be clear and concise. Use proper mathematical notation and LaTeX formatting for any math expressions."
+
+        // Inject user context if available (stays on-device, sent with each request)
+        let userContext = UserContextManager.shared.renderPromptBlock()
+        if !userContext.isEmpty {
+            p += "\n\n" + userContext
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
