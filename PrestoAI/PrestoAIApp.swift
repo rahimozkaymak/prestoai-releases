@@ -234,6 +234,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // "Settings" title triggers macOS auto-gear; use "Preferences" to avoid it.
         menu.addItem(NSMenuItem(title: "Preferences", action: #selector(openSettings), keyEquivalent: ""))
+
+        #if DEBUG
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "🔧 Debug: Show All UI Panels", action: #selector(debugShowAllPanels), keyEquivalent: ""))
+        #endif
+
         let quitItem = NSMenuItem(title: "Quit Presto AI", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
 
@@ -860,6 +866,66 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quickPromptFromMenu() {
         quickPromptCapture()
     }
+
+    // MARK: - Debug: Show All UI Panels
+
+    #if DEBUG
+    @objc private func debugShowAllPanels() {
+        var delay: Double = 0
+        let step: Double = 1.5
+
+        // 1. Settings tab
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.showSettings(initialTab: .settings)
+        }
+        delay += step
+
+        // 2. My Account tab
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.showSettings(initialTab: .myAccount)
+        }
+        delay += step
+
+        // 3. Sign-in page
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.settingsPanel?.close()
+            self?.showAccountCreation(showBackButton: true)
+        }
+        delay += step
+
+        // 4. Upgrade prompt
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.accountViewController = nil
+            self?.showUpgradePrompt()
+        }
+        delay += step
+
+        // 5. Sign-in nudge
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.upgradePromptController = nil
+            self?.signInNudgeController = SignInNudgeController()
+            self?.signInNudgeController?.show(
+                onSignIn: { self?.signInNudgeController = nil },
+                onDismiss: { self?.signInNudgeController = nil }
+            )
+        }
+        delay += step
+
+        // 6. Paywall
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.signInNudgeController = nil
+            self?.showPaywall()
+        }
+        delay += step
+
+        // 7. Cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.paywallController?.dismiss()
+            self?.paywallController = nil
+            print("[Debug] All panels shown. Take your screenshots!")
+        }
+    }
+    #endif
 
     @objc private func openReferral() {
         showPaywall()
