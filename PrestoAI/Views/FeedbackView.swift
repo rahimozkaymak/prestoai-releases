@@ -45,7 +45,7 @@ class FeedbackController: NSObject, WKScriptMessageHandler {
         container.wantsLayer = true
         container.layer?.cornerRadius = 14
         container.layer?.masksToBounds = true
-        container.layer?.backgroundColor = NSColor(red: 0.04, green: 0.04, blue: 0.04, alpha: 0.92).cgColor
+        container.layer?.backgroundColor = NSColor(red: 0.04, green: 0.04, blue: 0.04, alpha: 1.0).cgColor
         container.addSubview(wv)
 
         p.contentView = container
