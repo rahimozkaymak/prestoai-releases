@@ -8,7 +8,6 @@
 <link rel="icon" type="image/png" href="/img/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -200,50 +199,6 @@
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   .fade-in { animation: fadeIn 0.3s ease forwards; }
 
-  /* ── ANALYTICS ── */
-  .analytics-grid { display: grid; gap: 14px; margin-bottom: 14px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
-  .chart-card {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
-    padding: 18px 22px;
-  }
-  .chart-card h3 { font-size: 13px; font-weight: 600; color: #CCC; margin-bottom: 14px; }
-  .chart-card canvas { width: 100% !important; max-height: 220px; }
-  .chart-card-full { grid-column: 1 / -1; }
-
-  .date-range-picker {
-    display: flex; align-items: center; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
-  }
-  .date-range-picker button {
-    background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
-    padding: 5px 14px; color: var(--text3); font-size: 11px; cursor: pointer;
-    font-family: var(--font); transition: all 0.15s;
-  }
-  .date-range-picker button:hover { color: var(--text2); border-color: var(--border2); }
-  .date-range-picker button.active { background: #1A1A2E; color: var(--green); border-color: #2A3A2E; }
-
-  .funnel-analytics .funnel-row { margin-bottom: 6px; }
-  .funnel-analytics .funnel-pct {
-    font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
-    display: inline-block; min-width: 38px; text-align: center;
-  }
-  .funnel-analytics .pct-good { background: #0D3320; color: var(--green); }
-  .funnel-analytics .pct-warn { background: #2D2006; color: var(--yellow); }
-  .funnel-analytics .pct-bad { background: #2D1010; color: var(--red); }
-
-  .stat-cards-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-  .stat-mini {
-    background: var(--bg3); border: 1px solid #1C1C20; border-radius: 8px;
-    padding: 10px 14px; flex: 1; min-width: 140px;
-  }
-  .stat-mini .stat-label { font-size: 9px; margin-bottom: 4px; }
-  .stat-mini .stat-value { font-size: 18px; }
-
-  .analytics-select {
-    background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px;
-    padding: 5px 10px; color: var(--white); font-size: 11px; font-family: var(--mono);
-    outline: none; cursor: pointer;
-  }
-
   /* ── RESPONSIVE ── */
   @media (max-width: 860px) {
     .sidebar { width: 56px; }
@@ -278,12 +233,6 @@ let state = {
   lastRefresh: null,
   loginError: null,
   loginLoading: false,
-  analytics: null,
-  analyticsLoading: false,
-  analyticsDateRange: '30d',
-  analyticsCustomStart: null,
-  analyticsCustomEnd: null,
-  analyticsSelectedEvent: 'app.launched',
 };
 
 // ─── API ───
@@ -781,357 +730,11 @@ function renderSystem() {
     </div>`)}`;
 }
 
-// ─── ANALYTICS ───
-const ALL_EVENTS = ['app.launched','app.updatedFrom','app.backgrounded','onboarding.started','onboarding.completed','permission.screenRecording.granted','permission.screenRecording.denied','capture.attempted','capture.succeeded','capture.failed','capture.hotkey.changed','analyze.requested','analyze.completed','analyze.failed','study.sessionStarted','study.sessionEnded','study.modeSwitch','paywall.shown','auth.started','auth.completed','auth.failed','auth.loggedOut','checkout.started','checkout.completed','promo.redeemed','nudge.signIn.shown','nudge.signIn.accepted','nudge.signIn.dismissed','referral.shared','referral.rewardActivated','error.keychainSaveFailed','error.offlineDetected','error.tokenRefreshFailed'];
-
-// Chart.js dark theme defaults
-if (typeof Chart !== 'undefined') {
-  Chart.defaults.color = '#999';
-  Chart.defaults.borderColor = '#222';
-  Chart.defaults.font.family = 'Outfit, sans-serif';
-}
-
-// Track chart instances for cleanup
-const chartInstances = {};
-function destroyChart(id) { if (chartInstances[id]) { chartInstances[id].destroy(); delete chartInstances[id]; } }
-function destroyAllCharts() { Object.keys(chartInstances).forEach(destroyChart); }
-
-function getAnalyticsDateRange() {
-  const now = new Date();
-  let start, end = now.toISOString().split('T')[0];
-  switch(state.analyticsDateRange) {
-    case '7d': start = new Date(now - 7*86400000).toISOString().split('T')[0]; break;
-    case '30d': start = new Date(now - 30*86400000).toISOString().split('T')[0]; break;
-    case '90d': start = new Date(now - 90*86400000).toISOString().split('T')[0]; break;
-    case 'custom': start = state.analyticsCustomStart; end = state.analyticsCustomEnd; break;
-  }
-  return {start, end};
-}
-
-async function loadAnalytics() {
-  state.analyticsLoading = true;
-  render();
-  const {start, end} = getAnalyticsDateRange();
-  if (!start || !end) { state.analyticsLoading = false; render(); return; }
-  const params = `start_date=${start}&end_date=${end}`;
-  try {
-    const [funnelData, monetization, retention, studyStats, errors, referralStats, nudgeStats] = await Promise.all([
-      authFetch(`/api/v1/admin/analytics/funnel?${params}`),
-      authFetch(`/api/v1/admin/analytics/monetization-funnel?${params}`),
-      authFetch(`/api/v1/admin/analytics/retention?${params}`),
-      authFetch(`/api/v1/admin/analytics/study-stats?${params}`),
-      authFetch(`/api/v1/admin/analytics/errors?${params}`),
-      authFetch(`/api/v1/admin/analytics/referral-stats?${params}`),
-      authFetch(`/api/v1/admin/analytics/nudge-stats?${params}`),
-    ]);
-    state.analytics = { funnel: funnelData, monetization, retention, studyStats, errors, referralStats, nudgeStats };
-  } catch(e) {
-    console.error('Analytics load error:', e);
-    state.analytics = state.analytics || {};
-  }
-  state.analyticsLoading = false;
-  render();
-  // Load initial timeline after main render
-  setTimeout(() => loadEventTimeline(), 100);
-}
-
-async function loadEventTimeline() {
-  const {start, end} = getAnalyticsDateRange();
-  if (!start || !end) return;
-  const gran = document.getElementById('timeline-granularity')?.value || 'day';
-  try {
-    const data = await authFetch(`/api/v1/admin/analytics/events-over-time?event_name=${state.analyticsSelectedEvent}&start_date=${start}&end_date=${end}&granularity=${gran}`);
-    if (data) {
-      if (!state.analytics) state.analytics = {};
-      state.analytics.timeline = data;
-      renderTimelineChart();
-    }
-  } catch(e) { console.error('Timeline load error:', e); }
-}
-
-window.setAnalyticsRange = function(range) {
-  state.analyticsDateRange = range;
-  loadAnalytics();
-};
-
-window.setAnalyticsCustomDates = function() {
-  const s = document.getElementById('analytics-start')?.value;
-  const e = document.getElementById('analytics-end')?.value;
-  if (s && e) {
-    state.analyticsCustomStart = s;
-    state.analyticsCustomEnd = e;
-    state.analyticsDateRange = 'custom';
-    loadAnalytics();
-  }
-};
-
-window.setAnalyticsEvent = function(event) {
-  state.analyticsSelectedEvent = event;
-  loadEventTimeline();
-};
-
-window.changeTimelineGranularity = function() {
-  loadEventTimeline();
-};
-
-function renderTimelineChart() {
-  const tl = state.analytics?.timeline;
-  const canvas = document.getElementById('chart-timeline');
-  if (!canvas || !tl) return;
-  destroyChart('timeline');
-  const points = tl.data_points || tl.points || tl || [];
-  if (!Array.isArray(points) || !points.length) return;
-  chartInstances['timeline'] = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels: points.map(p => p.date || p.period || p.label || ''),
-      datasets: [{
-        label: state.analyticsSelectedEvent,
-        data: points.map(p => p.count || p.value || 0),
-        borderColor: '#38BDF8', backgroundColor: '#38BDF822',
-        fill: true, tension: 0.3, pointRadius: 2,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true, grid: { color: '#1A1A1E' } }, x: { grid: { color: '#1A1A1E' }, ticks: { maxTicksToShow: 10 } } }
-    }
-  });
-}
-
-function renderRetentionChart() {
-  const ret = state.analytics?.retention;
-  const canvas = document.getElementById('chart-retention');
-  if (!canvas || !ret) return;
-  destroyChart('retention');
-  const dau = ret.dau || ret.daily_active || [];
-  const wau = ret.wau || ret.weekly_active || [];
-  const mau = ret.mau || ret.monthly_active || [];
-  const labels = (dau.length ? dau : wau.length ? wau : mau).map(p => p.date || p.period || '');
-  chartInstances['retention'] = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'DAU', data: dau.map(p => p.count || p.value || 0), borderColor: '#6EE7B7', tension: 0.3, pointRadius: 2 },
-        { label: 'WAU', data: wau.map(p => p.count || p.value || 0), borderColor: '#38BDF8', tension: 0.3, pointRadius: 2 },
-        { label: 'MAU', data: mau.map(p => p.count || p.value || 0), borderColor: '#818CF8', tension: 0.3, pointRadius: 2 },
-      ]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { boxWidth: 12, padding: 16 } } },
-      scales: { y: { beginAtZero: true, grid: { color: '#1A1A1E' } }, x: { grid: { color: '#1A1A1E' } } }
-    }
-  });
-}
-
-function renderStudyPieChart() {
-  const ss = state.analytics?.studyStats;
-  const canvas = document.getElementById('chart-study-pie');
-  if (!canvas || !ss) return;
-  destroyChart('studyPie');
-  const learn = ss.learn_count || ss.learn || 0;
-  const solve = ss.solve_count || ss.solve || 0;
-  if (!learn && !solve) return;
-  chartInstances['studyPie'] = new Chart(canvas, {
-    type: 'doughnut',
-    data: {
-      labels: ['Learn', 'Solve'],
-      datasets: [{ data: [learn, solve], backgroundColor: ['#818CF8', '#6EE7B7'], borderWidth: 0 }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 16 } } },
-      cutout: '60%',
-    }
-  });
-}
-
-function renderErrorBarChart() {
-  const errs = state.analytics?.errors;
-  const canvas = document.getElementById('chart-errors');
-  if (!canvas || !errs) return;
-  destroyChart('errors');
-  const items = errs.by_type || errs.error_types || errs || [];
-  if (!Array.isArray(items) || !items.length) return;
-  chartInstances['errors'] = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: items.map(e => e.type || e.error_type || e.name || ''),
-      datasets: [{ data: items.map(e => e.count || e.value || 0), backgroundColor: '#F87171', borderRadius: 4 }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      indexAxis: 'y',
-      plugins: { legend: { display: false } },
-      scales: { x: { beginAtZero: true, grid: { color: '#1A1A1E' } }, y: { grid: { display: false } } }
-    }
-  });
-}
-
-function pctClass(pct) { return pct > 70 ? 'pct-good' : pct > 40 ? 'pct-warn' : 'pct-bad'; }
-
-function analyticsFunnel(stages) {
-  if (!stages || !stages.length) return '<div class="empty">No funnel data</div>';
-  const mx = stages[0]?.value || 1;
-  return `<div class="funnel-analytics">${stages.map((s,i) => {
-    const pct = mx > 0 ? (s.value/mx)*100 : 0;
-    const stepPct = i > 0 && stages[i-1].value > 0 ? ((s.value/stages[i-1].value)*100) : 100;
-    const drop = i > 0 ? `<span class="funnel-pct ${pctClass(stepPct)}">${stepPct.toFixed(0)}%</span>` : '';
-    return `<div class="funnel-row">
-      <div class="funnel-label">${s.label}</div>
-      <div class="funnel-bar"><div class="funnel-fill" style="width:${Math.max(pct,2)}%;background:linear-gradient(90deg,${s.color}88,${s.color}33)"><span class="funnel-val">${fmt(s.value)}</span></div></div>
-      <div class="funnel-drop">${drop}</div>
-    </div>`;
-  }).join('')}</div>`;
-}
-
-function renderAnalytics() {
-  if (state.analyticsLoading) return '<div class="empty">Loading analytics...</div>';
-
-  const a = state.analytics;
-  const range = state.analyticsDateRange;
-
-  // Date range picker
-  const rangePicker = `<div class="date-range-picker">
-    <button class="${range==='7d'?'active':''}" onclick="setAnalyticsRange('7d')">7 Days</button>
-    <button class="${range==='30d'?'active':''}" onclick="setAnalyticsRange('30d')">30 Days</button>
-    <button class="${range==='90d'?'active':''}" onclick="setAnalyticsRange('90d')">90 Days</button>
-    <button class="${range==='custom'?'active':''}" onclick="setAnalyticsRange('custom')">Custom</button>
-    ${range==='custom' ? `<input type="date" class="input input-sm" id="analytics-start" value="${state.analyticsCustomStart||''}" style="font-size:11px;padding:4px 8px">
-      <span style="color:var(--text3);font-size:11px">to</span>
-      <input type="date" class="input input-sm" id="analytics-end" value="${state.analyticsCustomEnd||''}" style="font-size:11px;padding:4px 8px">
-      <button class="btn-action" style="font-size:10px;padding:4px 10px" onclick="setAnalyticsCustomDates()">Apply</button>` : ''}
-  </div>`;
-
-  if (!a) return rangePicker + '<div class="empty">No analytics data. Click a date range to load.</div>';
-
-  // ─── A. Core Funnel ───
-  const f = a.funnel;
-  const funnelStages = f ? [
-    {label:'Launched', value:f.launched||f.app_launched||0, color:'#818CF8'},
-    {label:'Onboard Start', value:f.onboarding_started||0, color:'#38BDF8'},
-    {label:'Onboard Done', value:f.onboarding_completed||0, color:'#38BDF8'},
-    {label:'Perm Granted', value:f.permission_granted||0, color:'#FCD34D'},
-    {label:'Capture Try', value:f.capture_attempted||0, color:'#FCD34D'},
-    {label:'Capture OK', value:f.capture_succeeded||0, color:'#6EE7B7'},
-    {label:'Analyze Req', value:f.analyze_requested||0, color:'#6EE7B7'},
-    {label:'Analyze Done', value:f.analyze_completed||0, color:'#6EE7B7'},
-  ] : [];
-
-  // ─── B. Monetization Funnel ───
-  const m = a.monetization;
-  const monStages = m ? [
-    {label:'Paywall Shown', value:m.paywall_shown||0, color:'#818CF8'},
-    {label:'Auth Started', value:m.auth_started||0, color:'#38BDF8'},
-    {label:'Auth Done', value:m.auth_completed||0, color:'#38BDF8'},
-    {label:'Checkout Start', value:m.checkout_started||0, color:'#FCD34D'},
-    {label:'Checkout Done', value:m.checkout_completed||0, color:'#6EE7B7'},
-  ] : [];
-  const monConversion = m && (m.paywall_shown||0) > 0 ? ((m.checkout_completed||0) / m.paywall_shown * 100).toFixed(1) : null;
-
-  // ─── C. Study Stats ───
-  const ss = a.studyStats;
-
-  // ─── D. Errors ───
-  const errs = a.errors;
-  const errList = errs?.details || errs?.errors || (Array.isArray(errs) ? errs : []);
-
-  // ─── E. Referral Stats ───
-  const ref = a.referralStats;
-
-  // ─── F. Nudge Stats ───
-  const nudge = a.nudgeStats;
-  const nudgeConv = nudge && (nudge.shown||0) > 0 ? ((nudge.accepted||0)/nudge.shown*100).toFixed(1) : null;
-
-  return `${rangePicker}
-
-    <div class="analytics-grid">
-      <div class="chart-card chart-card-full">
-        <h3>Core Funnel</h3>
-        ${funnelStages.length ? analyticsFunnel(funnelStages) : '<div class="empty">No funnel data</div>'}
-      </div>
-    </div>
-
-    <div class="analytics-grid">
-      <div class="chart-card">
-        <h3>Monetization Funnel${monConversion !== null ? ` <span style="font-size:11px;color:var(--green);font-weight:400;margin-left:8px">${monConversion}% overall conversion</span>` : ''}</h3>
-        ${monStages.length ? analyticsFunnel(monStages) : '<div class="empty">No monetization data</div>'}
-      </div>
-      <div class="chart-card">
-        <h3>DAU / WAU / MAU</h3>
-        <div style="height:220px;position:relative"><canvas id="chart-retention"></canvas></div>
-      </div>
-    </div>
-
-    <div class="analytics-grid">
-      <div class="chart-card chart-card-full">
-        <h3 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          Event Timeline
-          <select class="analytics-select" onchange="setAnalyticsEvent(this.value)">
-            ${ALL_EVENTS.map(e => `<option value="${e}" ${e===state.analyticsSelectedEvent?'selected':''}>${e}</option>`).join('')}
-          </select>
-          <select class="analytics-select" id="timeline-granularity" onchange="changeTimelineGranularity()">
-            <option value="day">Daily</option>
-            <option value="week">Weekly</option>
-          </select>
-        </h3>
-        <div style="height:220px;position:relative"><canvas id="chart-timeline"></canvas></div>
-      </div>
-    </div>
-
-    <div class="analytics-grid">
-      <div class="chart-card">
-        <h3>Study Mode</h3>
-        ${ss ? `<div class="stat-cards-row">
-          <div class="stat-mini"><div class="stat-label">Sessions</div><div class="stat-value">${fmt(ss.total_sessions||ss.sessions||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Avg Duration</div><div class="stat-value">${ss.avg_duration ? ss.avg_duration.toFixed(1)+'m' : '—'}</div></div>
-          <div class="stat-mini"><div class="stat-label">Avg Questions</div><div class="stat-value">${ss.avg_questions ? ss.avg_questions.toFixed(1) : '—'}</div></div>
-        </div>
-        <div style="height:180px;position:relative"><canvas id="chart-study-pie"></canvas></div>` : '<div class="empty">No study data</div>'}
-      </div>
-      <div class="chart-card">
-        <h3>Errors by Type</h3>
-        <div style="height:200px;position:relative"><canvas id="chart-errors"></canvas></div>
-        ${errList.length ? `<div style="margin-top:12px;max-height:160px;overflow-y:auto">${table(
-          [{label:'Event',render:r=>`<span class="mono" style="font-size:10px">${r.event_name||r.name||''}</span>`},
-           {label:'Type',render:r=>`<span style="color:var(--red)">${r.error_type||r.type||''}</span>`},
-           {label:'Count',align:'right',render:r=>fmt(r.count||0)},
-           {label:'Last Seen',render:r=>fmtDatetime(r.last_seen||r.last_at||'')}],
-          errList
-        )}</div>` : ''}
-      </div>
-    </div>
-
-    <div class="analytics-grid">
-      <div class="chart-card">
-        <h3>Referrals</h3>
-        ${ref ? `<div class="stat-cards-row">
-          <div class="stat-mini"><div class="stat-label">Links Shared</div><div class="stat-value">${fmt(ref.shared||ref.links_shared||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Rewards Activated</div><div class="stat-value">${fmt(ref.rewards||ref.rewards_activated||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Conversion</div><div class="stat-value">${ref.conversion_rate != null ? ref.conversion_rate.toFixed(1)+'%' : (ref.shared > 0 ? ((ref.rewards||0)/ref.shared*100).toFixed(1)+'%' : '—')}</div></div>
-        </div>` : '<div class="empty">No referral data</div>'}
-      </div>
-      <div class="chart-card">
-        <h3>Nudge Performance</h3>
-        ${nudge ? `<div class="stat-cards-row">
-          <div class="stat-mini"><div class="stat-label">Shown</div><div class="stat-value">${fmt(nudge.shown||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Accepted</div><div class="stat-value">${fmt(nudge.accepted||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Dismissed</div><div class="stat-value">${fmt(nudge.dismissed||0)}</div></div>
-          <div class="stat-mini"><div class="stat-label">Conversion</div><div class="stat-value">${nudgeConv !== null ? nudgeConv+'%' : '—'}</div></div>
-        </div>` : '<div class="empty">No nudge data</div>'}
-      </div>
-    </div>`;
-}
-
 // ─── RENDER ───
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: '◉' },
   { id: 'users', label: 'Users', icon: '◎' },
   { id: 'economics', label: 'Unit Economics', icon: '◈' },
-  { id: 'analytics', label: 'Analytics', icon: '◆' },
   { id: 'promos', label: 'Promo Codes', icon: '✦' },
   { id: 'system', label: 'System', icon: '⊞' },
 ];
@@ -1167,7 +770,6 @@ function render() {
       case 'dashboard': pageContent = renderDashboard(); pageTitle = 'Dashboard'; break;
       case 'users': pageContent = renderUsers(); pageTitle = 'Users'; break;
       case 'economics': pageContent = renderEconomics(); pageTitle = 'Unit Economics'; break;
-      case 'analytics': pageContent = renderAnalytics(); pageTitle = 'Analytics'; break;
       case 'promos': pageContent = renderPromos(); pageTitle = 'Promo Codes'; break;
       case 'system': pageContent = renderSystem(); pageTitle = 'System'; break;
       default: pageContent = renderDashboard(); pageTitle = 'Dashboard';
@@ -1199,19 +801,6 @@ function render() {
       </div>
     </div>`;
 
-  // Post-render: analytics charts
-  if (state.page === 'analytics' && !state.selectedUser && state.analytics && !state.analyticsLoading) {
-    destroyAllCharts();
-    setTimeout(() => {
-      renderRetentionChart();
-      renderTimelineChart();
-      renderStudyPieChart();
-      renderErrorBarChart();
-    }, 50);
-  } else if (state.page !== 'analytics') {
-    destroyAllCharts();
-  }
-
   // Post-render: health check
   if (state.page === 'system' && !state.selectedUser) {
     fetch(`${API}/health`).then(r=>r.json()).then(h => {
@@ -1228,7 +817,6 @@ function render() {
 window.navigate = function(page) {
   state.page = page; state.selectedUser = null; state.selectedUserDetail = null;
   if (page === 'promos') loadPromos();
-  if (page === 'analytics') loadAnalytics();
   render();
 };
 
