@@ -78,6 +78,9 @@ struct UpgradePromptView: View {
         }
         .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
+        .onAppear {
+            Analytics.shared.track("paywall.shown")
+        }
     }
 }
 
@@ -97,6 +100,7 @@ struct AccountView: View {
     @State private var successMessage = ""
     @State private var isLoading = false
     @State private var showPasswordReset = false
+    @State private var failCount = 0
 
     var onSuccess: (String) -> Void
     var openPromoField: Bool = false
@@ -153,7 +157,11 @@ struct AccountView: View {
         .padding(.horizontal, 32)
         .frame(width: kPanelSize.width, height: kPanelSize.height)
         .background(Theme.bg(colorScheme))
-        .onAppear { showPromoField = openPromoField }
+        .onAppear {
+            showPromoField = openPromoField
+            failCount = 0
+            Analytics.shared.track("auth.started", params: ["method": "social"])
+        }
     }
 
     // MARK: - Social Auth (Primary)
@@ -380,12 +388,15 @@ struct AccountView: View {
                     )
                     await redeemPromoIfNeeded(jwt: jwt)
                     await MainActor.run {
+                        Analytics.shared.track("auth.completed", params: ["method": "apple", "attemptsBeforeSuccess": "\(failCount)"])
                         isLoading = false
                         onSuccess(jwt)
                         dismiss()
                     }
                 } catch {
                     await MainActor.run {
+                        failCount += 1
+                        Analytics.shared.track("auth.failed", params: ["method": "apple", "errorType": error.localizedDescription])
                         isLoading = false
                         errorMessage = error.localizedDescription
                     }
@@ -409,6 +420,7 @@ struct AccountView: View {
                 let jwt = try await GoogleSignInHelper.signIn()
                 await redeemPromoIfNeeded(jwt: jwt)
                 await MainActor.run {
+                    Analytics.shared.track("auth.completed", params: ["method": "google", "attemptsBeforeSuccess": "\(failCount)"])
                     isLoading = false
                     onSuccess(jwt)
                     dismiss()
@@ -417,10 +429,14 @@ struct AccountView: View {
                 await MainActor.run {
                     isLoading = false
                     if case .cancelled = error { return }
+                    failCount += 1
+                    Analytics.shared.track("auth.failed", params: ["method": "google", "errorType": error.localizedDescription])
                     errorMessage = error.localizedDescription
                 }
             } catch {
                 await MainActor.run {
+                    failCount += 1
+                    Analytics.shared.track("auth.failed", params: ["method": "google", "errorType": error.localizedDescription])
                     isLoading = false
                     errorMessage = error.localizedDescription
                 }
@@ -447,12 +463,15 @@ struct AccountView: View {
 
                 await redeemPromoIfNeeded(jwt: result.jwt)
                 await MainActor.run {
+                    Analytics.shared.track("auth.completed", params: ["method": "email", "attemptsBeforeSuccess": "\(failCount)"])
                     isLoading = false
                     onSuccess(result.jwt)
                     dismiss()
                 }
             } catch {
                 await MainActor.run {
+                    failCount += 1
+                    Analytics.shared.track("auth.failed", params: ["method": "email", "errorType": error.localizedDescription])
                     isLoading = false
                     errorMessage = error.localizedDescription
                     if errorMessage.contains("exist") || errorMessage.contains("already registered") {
@@ -470,6 +489,7 @@ struct AccountView: View {
         guard showPromoField, !trimmedPromo.isEmpty else { return }
         do {
             let result = try await APIService.shared.redeemPromoCode(code: trimmedPromo, token: jwt)
+            Analytics.shared.track("promo.redeemed")
             await MainActor.run { successMessage = result }
         } catch {
             await MainActor.run {
@@ -538,6 +558,7 @@ struct CheckoutStatusView: View {
 
     private func openCheckout() {
         guard let url = URL(string: checkoutURL) else { return }
+        Analytics.shared.track("checkout.started")
         NSWorkspace.shared.open(url)
         statusMessage = "Waiting for payment..."
     }
@@ -556,10 +577,13 @@ struct CheckoutStatusView: View {
                         return
                     }
                     let status = try await APIService.shared.validateAuth(token: jwt)
+                    #if DEBUG
                     print("[Checkout] Poll result: state=\(status.state), email=\(status.email ?? "nil")")
+                    #endif
 
                     await MainActor.run {
                         if status.state == "paid" {
+                            Analytics.shared.track("checkout.completed")
                             statusMessage = "You're all set! Press Cmd+Shift+X to continue."
                             pollingTask?.cancel()
                             let jwt = AppStateManager.shared.jwt ?? ""
@@ -572,7 +596,9 @@ struct CheckoutStatusView: View {
                         }
                     }
                 } catch {
+                    #if DEBUG
                     print("[Checkout] Poll error: \(error)")
+                    #endif
                 }
 
                 let elapsed = Date().timeIntervalSince(startTime)

@@ -70,7 +70,9 @@ class APIService {
     private init() {
         self.baseURL = UserDefaults.standard.string(forKey: "apiBaseURL")
             ?? "https://prestoai-backend-production.up.railway.app"
+        #if DEBUG
         print("[API] Base URL: \(self.baseURL)")
+        #endif
     }
     
     // MARK: - Token access (single source: AppStateManager)
@@ -81,20 +83,26 @@ class APIService {
     // MARK: - Auth
     
     func login(email: String, password: String) async throws -> (profile: UserProfile, jwt: String) {
+        #if DEBUG
         print("[API] Logging in: \(email)")
+        #endif
         let body: [String: Any] = ["email": email, "password": password]
         let data = try await post(endpoint: "/api/auth/login", body: body, authenticated: false)
 
         let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
         await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        #if DEBUG
         print("[API] Login successful, tokens saved")
+        #endif
 
         let profile = try await getProfileWithRetry()
         return (profile, tokens.accessToken)
     }
 
     func register(email: String, password: String, referralCode: String? = nil) async throws -> (profile: UserProfile, jwt: String) {
+        #if DEBUG
         print("[API] Registering: \(email)")
+        #endif
         var body: [String: Any] = [
             "email": email,
             "password": password,
@@ -106,7 +114,9 @@ class APIService {
 
         let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
         await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        #if DEBUG
         print("[API] Registration successful, tokens saved")
+        #endif
 
         let profile = try await getProfileWithRetry()
         return (profile, tokens.accessToken)
@@ -117,7 +127,9 @@ class APIService {
     /// Sign in with Apple — sends the Apple identity token to backend for verification.
     /// Backend verifies the token with Apple, creates/finds the user, and returns a JWT.
     func appleSignIn(identityToken: String, fullName: String?, email: String?) async throws -> String {
+        #if DEBUG
         print("[API] Apple Sign-In")
+        #endif
         var body: [String: Any] = [
             "identity_token": identityToken,
             "device_id": AppStateManager.shared.deviceID,
@@ -128,14 +140,18 @@ class APIService {
         let data = try await post(endpoint: "/api/auth/apple", body: body, authenticated: false)
         let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
         await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        #if DEBUG
         print("[API] Apple Sign-In successful, tokens saved")
+        #endif
         return tokens.accessToken
     }
 
     /// Sign in with Google — sends the OAuth authorization code to backend.
     /// Backend exchanges the code for Google tokens, verifies identity, creates/finds user, returns JWT.
     func googleSignIn(authCode: String, redirectURI: String) async throws -> String {
+        #if DEBUG
         print("[API] Google Sign-In")
+        #endif
         let body: [String: Any] = [
             "auth_code": authCode,
             "redirect_uri": redirectURI,
@@ -145,12 +161,16 @@ class APIService {
         let data = try await post(endpoint: "/api/auth/google", body: body, authenticated: false)
         let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
         await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+        #if DEBUG
         print("[API] Google Sign-In successful, tokens saved")
+        #endif
         return tokens.accessToken
     }
 
     func redeemPromoCode(code: String, token: String) async throws -> String {
+        #if DEBUG
         print("[API] Redeeming code: \(code)")
+        #endif
         let urlStr = baseURL + "/api/promo/redeem"
         guard let url = URL(string: urlStr) else {
             throw APIError.networkError("Invalid URL")
@@ -185,8 +205,11 @@ class APIService {
                 return try await getProfile()
             } catch {
                 if attempt < maxAttempts {
+                    #if DEBUG
                     print("[API] Profile fetch attempt \(attempt) failed, retrying in \(attempt)s...")
-                    try await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                    #endif
+                    let delay = UInt64(1 << (attempt - 1)) * 1_000_000_000 + UInt64.random(in: 0...500_000_000)
+                    try await Task.sleep(nanoseconds: delay)
                 } else {
                     throw error
                 }
@@ -196,8 +219,11 @@ class APIService {
     }
     
     func logout() {
+        Analytics.shared.track("auth.loggedOut")
         Task { @MainActor in AppStateManager.shared.signOut() }
+        #if DEBUG
         print("[API] Logged out")
+        #endif
     }
     
     var isLoggedIn: Bool { accessToken != nil }
@@ -209,16 +235,23 @@ class APIService {
     func refreshAccessToken() async -> Bool {
         guard let refresh = refreshToken else { return false }
         
+        #if DEBUG
         print("[API] Attempting token refresh...")
+        #endif
         do {
             let body: [String: Any] = ["refreshToken": refresh]
             let data = try await post(endpoint: "/api/auth/refresh", body: body, authenticated: false)
             let tokens = try JSONDecoder().decode(AuthTokens.self, from: data)
             await AppStateManager.shared.saveTokens(access: tokens.accessToken, refresh: tokens.refreshToken)
+            #if DEBUG
             print("[API] Token refresh successful")
+            #endif
             return true
         } catch {
+            Analytics.shared.track("error.tokenRefreshFailed", params: ["error": error.localizedDescription])
+            #if DEBUG
             print("[API] Token refresh failed: \(error.localizedDescription)")
+            #endif
             return false
         }
     }
@@ -275,7 +308,15 @@ class APIService {
             request.httpBody = body
             request.timeoutInterval = 300  // 5 minutes: covers large image upload + Anthropic stream
 
-            let delegate = SSEStreamDelegate(onChunk: onChunk, onComplete: onComplete, onError: onError)
+            Analytics.shared.track("analyze.requested")
+
+            let delegate = SSEStreamDelegate(onChunk: onChunk, onComplete: { queriesRemaining, state in
+                Analytics.shared.track("analyze.completed")
+                onComplete(queriesRemaining, state)
+            }, onError: { error in
+                Analytics.shared.track("analyze.failed", params: ["errorType": error.localizedDescription])
+                onError(error)
+            })
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             delegate.setSession(session)
             session.dataTask(with: request).resume()
@@ -301,12 +342,17 @@ class APIService {
     // MARK: - Device & Auth Status
 
     func checkDeviceStatus(deviceID: String) async throws -> DeviceStatus {
-        let urlStr = baseURL + "/api/device/status?device_id=\(deviceID)"
-        print("[API] GET \(urlStr)")
-        guard let url = URL(string: urlStr) else {
+        guard var components = URLComponents(string: baseURL + "/api/device/status") else {
             throw APIError.networkError("Invalid URL")
         }
-        
+        components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
+        guard let url = components.url else {
+            throw APIError.networkError("Invalid URL")
+        }
+        #if DEBUG
+        print("[API] GET \(url.absoluteString)")
+        #endif
+
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -336,7 +382,9 @@ class APIService {
             throw APIError.networkError("Invalid URL")
         }
         
+        #if DEBUG
         print("[API] GET \(url.absoluteString)")
+        #endif
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -772,9 +820,11 @@ class APIService {
 
     // MARK: - HTTP Helpers
 
-    private func get(endpoint: String, token: String? = nil, retried: Bool = false) async throws -> Data {
+    private func get(endpoint: String, token: String? = nil, retryCount: Int = 0) async throws -> Data {
         let urlStr = baseURL + endpoint
+        #if DEBUG
         print("[API] GET \(urlStr)")
+        #endif
         guard let url = URL(string: urlStr) else {
             throw APIError.networkError("Invalid URL: \(urlStr)")
         }
@@ -795,19 +845,23 @@ class APIService {
             }
         }
 
-        // Retry once on 5xx server errors
-        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), !retried {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            return try await get(endpoint: endpoint, token: token, retried: true)
+        // Retry up to 3 times on 5xx with exponential backoff + jitter
+        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), retryCount < 3 {
+            let baseDelay: UInt64 = 500_000_000 // 0.5s
+            let delay = baseDelay * UInt64(1 << retryCount) + UInt64.random(in: 0...200_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            return try await get(endpoint: endpoint, token: token, retryCount: retryCount + 1)
         }
 
         try handleResponse(response, data: data)
         return data
     }
-    
-    private func post(endpoint: String, body: [String: Any], authenticated: Bool = true, retried: Bool = false) async throws -> Data {
+
+    private func post(endpoint: String, body: [String: Any], authenticated: Bool = true, retryCount: Int = 0) async throws -> Data {
         let urlStr = baseURL + endpoint
+        #if DEBUG
         print("[API] POST \(urlStr)")
+        #endif
         guard let url = URL(string: urlStr) else {
             throw APIError.networkError("Invalid URL: \(urlStr)")
         }
@@ -822,17 +876,19 @@ class APIService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        // Auto-refresh on 401 (only for authenticated requests)
-        if authenticated, let http = response as? HTTPURLResponse, http.statusCode == 401 {
+        // Auto-refresh on 401 (only for authenticated requests) — cap recursion depth
+        if authenticated, let http = response as? HTTPURLResponse, http.statusCode == 401, retryCount == 0 {
             if await refreshAccessToken() {
-                return try await post(endpoint: endpoint, body: body, authenticated: true)
+                return try await post(endpoint: endpoint, body: body, authenticated: true, retryCount: 1)
             }
         }
 
-        // Retry once on 5xx server errors
-        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), !retried {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            return try await post(endpoint: endpoint, body: body, authenticated: authenticated, retried: true)
+        // Retry up to 3 times on 5xx with exponential backoff + jitter
+        if let http = response as? HTTPURLResponse, (500...599).contains(http.statusCode), retryCount < 3 {
+            let baseDelay: UInt64 = 500_000_000
+            let delay = baseDelay * UInt64(1 << retryCount) + UInt64.random(in: 0...200_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            return try await post(endpoint: endpoint, body: body, authenticated: authenticated, retryCount: retryCount + 1)
         }
 
         try handleResponse(response, data: data)
@@ -867,9 +923,11 @@ class APIService {
         ]
         let data = try await post(endpoint: "/api/v1/study/auto-solve", body: body)
 
+        #if DEBUG
         print("[AutoSolve] === COORDINATOR RESPONSE START ===")
         print("[AutoSolve] \(String(data: data, encoding: .utf8) ?? "nil")")
         print("[AutoSolve] === COORDINATOR RESPONSE END ===")
+        #endif
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw APIError.serverError("Invalid identify response")
@@ -884,15 +942,25 @@ class APIService {
                 let id: String
                 if let s = rawId as? String { id = s }
                 else if let n = rawId as? Int { id = String(n) }
-                else { print("[AutoSolve] Skipping question with missing/unparseable id: \(String(describing: rawId))"); continue }
+                else {
+                    #if DEBUG
+                    print("[AutoSolve] Skipping question with missing/unparseable id: \(String(describing: rawId))")
+                    #endif
+                    continue
+                }
                 guard let qText = item["question_text"] as? String else {
-                    print("[AutoSolve] Skipping question \(id): missing question_text"); continue
+                    #if DEBUG
+                    print("[AutoSolve] Skipping question \(id): missing question_text")
+                    #endif
+                    continue
                 }
                 let hint = item["answer_box_hint"] as? String ?? ""
                 questions.append(IdentifiedQuestion(id: id, questionText: qText, answerBoxHint: hint))
             }
         } else {
+            #if DEBUG
             print("[AutoSolve] 'questions' key missing or wrong type in response. Keys: \(json.keys.joined(separator: ", "))")
+            #endif
         }
 
         return IdentifyResponse(globalContext: globalContext, questions: questions)
@@ -924,10 +992,14 @@ class APIService {
     private func handleResponse(_ response: URLResponse, data: Data? = nil) throws {
         guard let httpResponse = response as? HTTPURLResponse else { return }
         
+        #if DEBUG
         print("[API] Response status: \(httpResponse.statusCode)")
+        #endif
         if httpResponse.statusCode < 200 || httpResponse.statusCode >= 300 {
             if let data = data, let body = String(data: data, encoding: .utf8) {
+                #if DEBUG
                 print("[API] Error body: \(body)")
+                #endif
             }
         }
         
@@ -968,23 +1040,31 @@ enum ImageCompressor {
     static func compress(_ base64: String) -> (String, String) {
         guard let data = Data(base64Encoded: base64),
               let nsImage = NSImage(data: data) else {
+            #if DEBUG
             print("[Image] Decode failed, using original")
+            #endif
             return (base64, "image/png")
         }
         
         // Resize to fit within 1568px on longest side, JPEG at 80% quality
         if let result = resizeAndEncode(nsImage, maxSide: 1568, quality: 0.80) {
+            #if DEBUG
             print("[Image] Compressed: \(base64.count) → \(result.count) chars")
+            #endif
             return (result, "image/jpeg")
         }
 
         // Fallback: resize to PNG at 1568px instead of sending original full-size
         if let pngResult = resizeAndEncodePNG(nsImage, maxSide: 1568) {
+            #if DEBUG
             print("[Image] JPEG failed, using resized PNG: \(base64.count) → \(pngResult.count) chars")
+            #endif
             return (pngResult, "image/png")
         }
 
+        #if DEBUG
         print("[Image] All compression failed, using original")
+        #endif
         return (base64, "image/png")
     }
     
@@ -1140,7 +1220,9 @@ private class SSEStreamDelegate: NSObject, URLSessionDataDelegate {
             if let qr = lastQueriesRemaining, let st = lastState {
                 DispatchQueue.main.async { self.onComplete(qr, st) }
             } else if !didReportError {
+                #if DEBUG
                 print("[SSE] Stream completed but no state data received — backend may not be running")
+                #endif
                 DispatchQueue.main.async { self.onError(APIError.networkError("No response received. Is the backend running?")) }
             }
         }

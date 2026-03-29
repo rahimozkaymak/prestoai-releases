@@ -201,6 +201,7 @@ struct PaywallView: View {
         let link = "https://prestoai.app/r/\(code)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(link, forType: .string)
+        Analytics.shared.track("referral.shared")
         withAnimation { linkCopied = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation { linkCopied = false }

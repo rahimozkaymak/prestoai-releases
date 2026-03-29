@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import IOKit
 import CommonCrypto
+import Network
 
 // MARK: - App State Enum
 
@@ -28,11 +29,36 @@ class AppStateManager: ObservableObject {
     private let deviceIDKey = "presto.device_id"
     private let accessTokenKey = "presto.access_token"
     private let refreshTokenKey = "presto.refresh_token"
-    
+
+    // Network monitoring
+    private let networkMonitor = NWPathMonitor()
+    private let networkQueue = DispatchQueue(label: "ai.presto.networkMonitor")
+
     private init() {
+        startNetworkMonitor()
         Task {
             await initializeState()
         }
+    }
+
+    private func startNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            let wasOffline = self.isOffline
+            let nowSatisfied = path.status == .satisfied
+
+            if wasOffline && nowSatisfied {
+                // Network recovered — re-initialize state
+                Task { @MainActor in
+                    self.isOffline = false
+                    #if DEBUG
+                    print("[AppState] Network recovered, re-initializing state...")
+                    #endif
+                    await self.initializeState()
+                }
+            }
+        }
+        networkMonitor.start(queue: networkQueue)
     }
     
     // MARK: - Device ID Management
@@ -45,7 +71,9 @@ class AppStateManager: ObservableObject {
         // Generate new device ID
         let newID = UUID().uuidString
         KeychainHelper.save(key: deviceIDKey, value: newID)
+        #if DEBUG
         print("[AppState] Generated new device ID: \(newID)")
+        #endif
         return newID
     }
     
@@ -91,40 +119,54 @@ class AppStateManager: ObservableObject {
     func saveTokens(access: String, refresh: String) {
         KeychainHelper.save(key: accessTokenKey, value: access)
         KeychainHelper.save(key: refreshTokenKey, value: refresh)
+        #if DEBUG
         print("[AppState] Tokens saved to Keychain")
+        #endif
     }
     
     /// Legacy helper — saves access token only (for backward compat with checkout flow).
     func saveJWT(_ token: String) {
         KeychainHelper.save(key: accessTokenKey, value: token)
+        #if DEBUG
         print("[AppState] Access token saved to Keychain")
+        #endif
     }
     
     private func clearTokens() {
         KeychainHelper.delete(key: accessTokenKey)
         KeychainHelper.delete(key: refreshTokenKey)
+        #if DEBUG
         print("[AppState] Tokens cleared from Keychain")
+        #endif
     }
     
     // MARK: - State Initialization & Updates
     
     @MainActor
     func initializeState() async {
+        #if DEBUG
         print("[AppState] Initializing app state...")
+        #endif
         
         // Check if we have a JWT
         if let token = accessToken {
+            #if DEBUG
             print("[AppState] Found access token, validating...")
+            #endif
             do {
                 let status = try await APIService.shared.validateAuth(token: token)
                 if status.state == "paid" {
                     currentState = .paid
+                    #if DEBUG
                     print("[AppState] Token valid, state = .paid")
+                    #endif
                     return
                 } else {
                     // Subscription expired
                     clearTokens()
+                    #if DEBUG
                     print("[AppState] Subscription expired, cleared tokens")
+                    #endif
                 }
             } catch {
                 // #18 — Try refreshing before giving up; verify token was saved
@@ -134,19 +176,25 @@ class AppStateManager: ObservableObject {
                             let status = try await APIService.shared.validateAuth(token: newToken)
                             if status.state == "paid" {
                                 currentState = .paid
+                                #if DEBUG
                                 print("[AppState] Token refreshed, state = .paid")
+                                #endif
                                 return
                             }
                         } catch { /* fall through */ }
                     } else {
                         // Token refresh claimed success but token not in Keychain — retry once
+                        #if DEBUG
                         print("[AppState] Token refresh succeeded but token not saved, retrying...")
+                        #endif
                         if await APIService.shared.refreshAccessToken(), let retryToken = accessToken, !retryToken.isEmpty {
                             do {
                                 let status = try await APIService.shared.validateAuth(token: retryToken)
                                 if status.state == "paid" {
                                     currentState = .paid
+                                    #if DEBUG
                                     print("[AppState] Token refreshed on retry, state = .paid")
+                                    #endif
                                     return
                                 }
                             } catch { /* fall through */ }
@@ -154,7 +202,9 @@ class AppStateManager: ObservableObject {
                     }
                 }
                 clearTokens()
+                #if DEBUG
                 print("[AppState] Token validation failed: \(error.localizedDescription)")
+                #endif
             }
         }
         
@@ -170,23 +220,32 @@ class AppStateManager: ObservableObject {
             
             if status.queriesRemaining > 0 {
                 currentState = .freeActive
+                #if DEBUG
                 print("[AppState] Device status: \(status.queriesRemaining) queries remaining, state = .freeActive")
+                #endif
             } else {
                 // Check if referral reward is active before marking as exhausted
                 await checkReferralReward()
                 if currentState != .referralActive {
                     currentState = .freeExhausted
+                    #if DEBUG
                     print("[AppState] Device status: 0 queries remaining, state = .freeExhausted")
+                    #endif
                 } else {
+                    #if DEBUG
                     print("[AppState] Device status: referral reward active, state = .referralActive")
+                    #endif
                 }
             }
         } catch {
             // #19 — Backend unreachable: do NOT grant free queries offline
             isOffline = true
+            Analytics.shared.track("error.offlineDetected")
             currentState = .anonymous
             queriesRemaining = 0
+            #if DEBUG
             print("[AppState] Backend unreachable, state = .anonymous (offline)")
+            #endif
         }
     }
     
@@ -203,17 +262,23 @@ class AppStateManager: ObservableObject {
             currentState = .paid
         default:
             // Don't change state on unknown values — prevents the lockout bug
+            #if DEBUG
             print("[AppState] Ignoring unknown state: \(state)")
+            #endif
         }
         
+        #if DEBUG
         print("[AppState] Updated after query: \(queriesRemaining) remaining, state = \(currentState)")
+        #endif
     }
     
     @MainActor
     func setStateToPaid(jwt: String) {
         saveJWT(jwt)
         currentState = .paid
+        #if DEBUG
         print("[AppState] State set to .paid")
+        #endif
     }
     
     @MainActor
@@ -228,7 +293,9 @@ class AppStateManager: ObservableObject {
         // Keep device ID — free queries are lifetime
         currentState = .freeExhausted
         queriesRemaining = 0
+        #if DEBUG
         print("[AppState] Signed out, state = .freeExhausted")
+        #endif
     }
     
     // MARK: - Can Analyze Check
@@ -248,6 +315,7 @@ class AppStateManager: ObservableObject {
                 if let expires = formatter.date(from: expiresStr), expires > Date() {
                     referralRewardActive = true
                     currentState = .referralActive
+                    Analytics.shared.track("referral.rewardActivated")
                     return
                 }
                 // Also try without fractional seconds
@@ -255,6 +323,7 @@ class AppStateManager: ObservableObject {
                 if let expires = formatter.date(from: expiresStr), expires > Date() {
                     referralRewardActive = true
                     currentState = .referralActive
+                    Analytics.shared.track("referral.rewardActivated")
                     return
                 }
             }

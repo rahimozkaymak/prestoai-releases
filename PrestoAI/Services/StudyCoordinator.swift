@@ -179,6 +179,7 @@ class StudyCoordinator: ObservableObject {
             self?.performInitialIdentify()
         }
 
+        Analytics.shared.track("study.sessionStarted")
         print("[Coordinator] Session started — \(newSession.id)")
     }
 
@@ -203,6 +204,14 @@ class StudyCoordinator: ObservableObject {
         if let o = appObserver { NSWorkspace.shared.notificationCenter.removeObserver(o); appObserver = nil }
 
         solverEngine.cancelAll()
+
+        // Analytics: study.sessionEnded (before session/memory are cleared)
+        let sessionDuration = session.map { "\(Int(Date().timeIntervalSince($0.startedAt)))" } ?? "0"
+        let questionsCount = "\(memory?.allQuestionTextFragments().count ?? 0)"
+        Analytics.shared.track("study.sessionEnded", params: [
+            "durationSeconds": sessionDuration,
+            "questionsIdentified": questionsCount
+        ])
 
         // Report session
         if let s = session { reportSessionEnd(s) }
@@ -282,6 +291,7 @@ class StudyCoordinator: ObservableObject {
         guard isActive else { return }
         memory?.recordModeTime(mode: currentMode)
         currentMode = mode
+        Analytics.shared.track("study.modeSwitch", params: ["toMode": "\(mode)"])
 
         // Restart detection timer with new interval
         captureTimer?.invalidate()
@@ -354,6 +364,7 @@ class StudyCoordinator: ObservableObject {
 
     // MARK: - Content Detection (V2)
 
+    @MainActor
     private func runContentDetection() async {
         guard isActive, !isPaused, !isPrivateAppDetected, !isIdentifyInFlight else { return }
 
@@ -422,6 +433,7 @@ class StudyCoordinator: ObservableObject {
         }
     }
 
+    @MainActor
     private func identifyNewContent(base64: String, ocrPreview: String, isNewPage: Bool) async {
         guard !isIdentifyInFlight else { return }
         isIdentifyInFlight = true

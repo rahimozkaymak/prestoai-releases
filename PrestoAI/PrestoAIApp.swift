@@ -127,6 +127,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updaterController.startUpdater()
 
         print("[Presto.AI] App launched — Cmd+Shift+X to capture, Cmd+Shift+Z for quick prompt, Cmd+Shift+S for Study Mode, Cmd+Shift+D for accessibility scan, ESC to dismiss")
+
+        // Analytics: app.launched
+        Analytics.shared.track("app.launched")
+
+        // Analytics: app.updatedFrom — detect version changes
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let lastVersion = UserDefaults.standard.string(forKey: "lastKnownAppVersion")
+        if let lastVersion, lastVersion != currentVersion {
+            Analytics.shared.track("app.updatedFrom", params: ["fromVersion": lastVersion])
+        }
+        UserDefaults.standard.set(currentVersion, forKey: "lastKnownAppVersion")
+
+        // Analytics: app.backgrounded
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            Analytics.shared.track("app.backgrounded")
+        }
     }
     
     // FIX #7: Observe state changes from AppStateManager
@@ -612,8 +628,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func captureScreenshot() {
         let stateManager = AppStateManager.shared
 
+        Analytics.shared.track("capture.attempted")
+
         if stateManager.isOffline {
             overlayManager?.showError("Unable to connect to Presto AI servers. Check your internet connection and try again.")
+            Analytics.shared.track("capture.failed", params: ["reason": "offline"])
             return
         }
 
@@ -621,10 +640,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showPaywall()
             return
         }
-        
+
         Task {
             do {
                 let screenshot = try await ScreenCaptureService.captureInteractive()
+                Analytics.shared.track("capture.succeeded")
                 await MainActor.run { self.overlayManager?.showLoading() }
 
                 self.overlayManager?.storeConversationContext(screenshot: screenshot, initialPrompt: nil)
@@ -680,11 +700,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     print("[Presto.AI] Screenshot cancelled by user")
                     return
                 }
+                Analytics.shared.track("capture.failed", params: ["reason": error.localizedDescription])
                 await MainActor.run { self.overlayManager?.showError(error.localizedDescription) }
             }
         }
     }
-    
+
     // MARK: - Vision Click (Cmd+Shift+D)
 
     private func performVisionClick() {
@@ -1007,14 +1028,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.signInNudgeController = SignInNudgeController()
             self?.signInNudgeController?.show(
                 onSignIn: { [weak self] in
+                    Analytics.shared.track("nudge.signIn.accepted")
                     self?.signInNudgeController = nil
                     self?.showAccountCreation()
                 },
                 onDismiss: { [weak self] in
+                    Analytics.shared.track("nudge.signIn.dismissed")
                     UserDefaults.standard.set(true, forKey: "signInNudgeDismissed")
                     self?.signInNudgeController = nil
                 }
             )
+            Analytics.shared.track("nudge.signIn.shown")
         }
     }
 

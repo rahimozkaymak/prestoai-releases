@@ -49,6 +49,7 @@ class VisionClickController {
         }
 
         // 3) No elements found at all
+        originalScreenshot = nil
         completion(false, "No clickable elements detected on screen.")
     }
 
@@ -146,8 +147,9 @@ class VisionClickController {
     // MARK: - Click Helper
 
     private func doClick(at point: CGPoint, method: String, completion: @escaping (Bool, String) -> Void) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
             ClickExecutor.click(at: point)
+            self?.originalScreenshot = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 completion(true, method)
             }

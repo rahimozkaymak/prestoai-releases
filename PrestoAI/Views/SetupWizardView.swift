@@ -100,6 +100,7 @@ struct SetupWizardView: View {
         .onAppear {
             startPolling()
             stepEnteredTime = Date()
+            Analytics.shared.track("onboarding.started")
 
             switch startMode {
             case .fresh:
@@ -274,6 +275,7 @@ struct SetupWizardView: View {
     }
     
     private func triggerGrantedAnimation() {
+        Analytics.shared.track("permission.screenRecording.granted")
         screenRecordingGranted = true
         withAnimation(.easeInOut(duration: 0.3)) {
             permissionJustGranted = true
@@ -490,6 +492,8 @@ struct SetupWizardView: View {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                             triggerGrantedAnimation()
                         }
+                    } else {
+                        Analytics.shared.track("permission.screenRecording.denied")
                     }
                 }
                 
@@ -511,6 +515,7 @@ struct SetupWizardView: View {
                 actionButton(label: "Start using Presto.AI", visible: showMenuHint) {
                     UserDefaults.standard.set(OnboardingState.completed.rawValue, forKey: "onboardingState")
                     LaunchAtLoginManager.shared.enable()
+                    Analytics.shared.track("onboarding.completed")
                     onComplete()
                 }
                 
